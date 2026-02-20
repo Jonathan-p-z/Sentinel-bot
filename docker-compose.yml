@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  sentinel:
+    build: .
+    env_file: .env
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - DATABASE_PATH=/data/sentinel.db
+    volumes:
+      - sentinel-data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    restart: unless-stopped
+
+volumes:
+  sentinel-data:
