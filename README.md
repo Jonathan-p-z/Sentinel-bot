@@ -46,6 +46,43 @@ Keep secrets and local data out of git. Create these in the project root unless 
 
 If you need per-machine overrides, use .env.local or config.yaml.local and keep them ignored.
 
+Example .env (project root):
+```
+DISCORD_TOKEN=YOUR_DISCORD_BOT_TOKEN
+CONFIG_PATH=config.yaml
+DATABASE_PATH=./data/sentinel.db
+LOG_LEVEL=info
+DEFAULT_SECURITY_LOG_CHANNEL=
+DEFAULT_LANGUAGE=fr
+MODE=normal
+ACTIONS_ENABLED=false
+AUDIT_TO_CHANNEL=true
+DAILY_SUMMARY=true
+```
+
+Example config.yaml (project root):
+```yaml
+discord_token: ""
+database_path: "./data/sentinel.db"
+log_level: "info"
+default_security_log_channel: ""
+default_language: "fr"
+retention_days: 14
+rule_preset: "medium"
+mode: "normal"
+
+actions:
+	enabled: false
+	timeout_minutes: 10
+	quarantine_role_id: ""
+
+notifications:
+	channel_warn_enabled: true
+	dm_warn_enabled: true
+	audit_to_channel: true
+	daily_summary: true
+```
+
 ## Audit-Only Mode
 When MODE is audit, actions are simulated and only logged. This lets you validate rules before enabling enforcement.
 
