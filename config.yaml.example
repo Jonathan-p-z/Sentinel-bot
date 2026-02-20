@@ -1,0 +1,54 @@
+discord_token: ""
+database_path: "/data/sentinel.db"
+log_level: "info"
+default_security_log_channel: ""
+default_language: "fr"
+retention_days: 14
+rule_preset: "medium"
+mode: "normal"
+
+health:
+  enabled: false
+  addr: ":8080"
+
+risk:
+  decay_per_minute: 0.5
+  ttl_minutes: 60
+  trust_weight: 0.5
+
+trust:
+  max_score: 100
+  ttl_minutes: 1440
+
+thresholds:
+  spam_messages: 6
+  spam_window_seconds: 8
+  raid_joins: 6
+  raid_window_seconds: 10
+  phishing_risk: 30
+  burst_links: 3
+  burst_window_seconds: 20
+
+actions:
+  enabled: false
+  delete: 20
+  quarantine: 40
+  timeout: 60
+  ban: 80
+  timeout_minutes: 10
+  quarantine_role_id: ""
+
+notifications:
+  channel_warn_enabled: true
+  dm_warn_enabled: true
+  audit_to_channel: true
+  daily_summary: true
+  embed_colors:
+    action: 16001675
+    warning: 15684410
+    error: 16309654
+
+playbook:
+  lockdown_minutes: 15
+  strict_mode_minutes: 10
+  exit_step_seconds: 20
