@@ -2,6 +2,14 @@
 set -eu
 
 DB_PATH=${DATABASE_PATH:-/data/sentinel.db}
+DB_DIR=$(dirname "${DB_PATH}")
+
+mkdir -p "${DB_DIR}"
+
+if [ ! -f "${DB_PATH}" ]; then
+  echo "Database not found, creating ${DB_PATH}"
+  sqlite3 "${DB_PATH}" "PRAGMA user_version;" >/dev/null
+fi
 
 echo "Applying migrations to ${DB_PATH}"
 

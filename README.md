@@ -5,7 +5,7 @@ Sentinel Adaptive is a privacy-first, defensive Discord security bot for multi-g
 ## Highlights
 - Defensive-only controls with audit-only mode
 - Risk engine with decay, TTL, and trust offsets
-- Anti-spam, anti-raid, anti-phishing modules
+- Anti-spam, anti-raid, anti-phishing, anti-hate modules
 - Structured JSON logs and optional health endpoint
 - SQLite by default, Postgres optional later
 
@@ -22,6 +22,7 @@ Common environment options:
 - DATABASE_PATH (default /data/sentinel.db)
 - LOG_LEVEL (debug, info, warn, error)
 - DEFAULT_SECURITY_LOG_CHANNEL
+- DEFAULT_AUDIT_LOG_CHANNEL
 - DEFAULT_LANGUAGE (fr, en, es)
 - RETENTION_DAYS
 - RULE_PRESET (low, medium, high)
@@ -33,6 +34,17 @@ Common environment options:
 - DM_WARN_ENABLED (send warnings by DM)
 - AUDIT_TO_CHANNEL (mirror audit logs to security channel)
 - DAILY_SUMMARY (daily summary of top risk and voice)
+- LOG_DISCORD_MIN_LEVEL (WARN, HIGH, CRIT)
+- LOG_DISCORD_CATEGORIES (comma-separated events)
+- LOG_DISCORD_RATE_LIMIT_SECONDS
+- LOG_DIGEST_INTERVAL_MINUTES
+- LOG_WARN_RARE_MINUTES
+- LOG_DEDUP_WINDOW_SECONDS
+- HATE_ENABLED
+- HATE_PATTERNS (comma-separated words/regex)
+- HATE_ALLOWLIST (comma-separated allowed words/phrases)
+- HATE_TIMEOUT_MINUTES (default 60)
+- HATE_FORGIVE_AFTER_DAYS (default 30)
 - EMBED_COLOR_ACTION (decimal color for action embed)
 - EMBED_COLOR_WARNING (decimal color for warning embed)
 - EMBED_COLOR_ERROR (decimal color for error embed)
@@ -45,6 +57,43 @@ Keep secrets and local data out of git. Create these in the project root unless 
 - logs/ (local log files, if you enable file logging)
 
 If you need per-machine overrides, use .env.local or config.yaml.local and keep them ignored.
+
+Example .env (project root):
+```
+DISCORD_TOKEN=YOUR_DISCORD_BOT_TOKEN
+CONFIG_PATH=config.yaml
+DATABASE_PATH=./data/sentinel.db
+LOG_LEVEL=info
+DEFAULT_SECURITY_LOG_CHANNEL=
+DEFAULT_LANGUAGE=fr
+MODE=normal
+ACTIONS_ENABLED=false
+AUDIT_TO_CHANNEL=true
+DAILY_SUMMARY=true
+```
+
+Example config.yaml (project root):
+```yaml
+discord_token: ""
+database_path: "./data/sentinel.db"
+log_level: "info"
+default_security_log_channel: ""
+default_language: "fr"
+retention_days: 14
+rule_preset: "medium"
+mode: "normal"
+
+actions:
+	enabled: false
+	timeout_minutes: 10
+	quarantine_role_id: ""
+
+notifications:
+	channel_warn_enabled: true
+	dm_warn_enabled: true
+	audit_to_channel: true
+	daily_summary: true
+```
 
 ## Audit-Only Mode
 When MODE is audit, actions are simulated and only logged. This lets you validate rules before enabling enforcement.
@@ -60,20 +109,96 @@ Set HEALTH_ENABLED=true and HEALTH_ADDR=":8080" to expose /health.
 - /mode audit|normal
 - /preset low|medium|high
 - /lockdown on|off
-- /logs (set admin-only channel)
+- /logs [type=alerts|audit] [channel]
 - /rules view|set
 - /domain allow add|remove|list
 - /domain block add|remove|list
 - /report day|week
-- /language (fr|en|es)
+- /language (fr|en|es|pt)
 - /risk reset [user]
+- /whitelist add|remove|list [user] [role]
+- /nuke status|enable|disable|set
 - /verify
+
+## Anti-Nuke and Whitelist
+Anti-nuke detects rapid destructive actions from a single actor and responds automatically.
+- It uses audit logs to identify who performed the action.
+- It counts actions per actor inside `window_seconds` and triggers when the threshold is reached.
+- When triggered, it logs `anti_nuke`, enters lockdown, and timeouts the actor (if enforcement is enabled).
+- Whitelisted/exempt actors can still trigger lockdown if they exceed the extreme threshold, but no sanction is applied.
+- Configure the exempt extreme rule with `nuke.exempt_threshold` and `nuke.exempt_window_seconds`.
+
+Whitelist exclusions:
+- Server owner and admins are always excluded.
+- You can add trusted users or roles with `/whitelist`.
+
+Keys for `/nuke set`:
+- window_seconds
+- channel_delete, channel_create, channel_update
+- role_delete, role_create, role_update
+- webhook_update
+- ban_add
+- guild_update
+
+## Anti-Hate (Deterministic Escalation)
+Anti-hate uses pattern matching and persistent per-user infractions in SQLite (`user_infractions`) so escalation survives restarts.
+- Detection uses lowercase normalization + token/regex matching + allowlist bypass.
+- Whitelisted/admin users are excluded (same exemption model as other protections).
+- Escalation policy is deterministic:
+	- count = 1 -> delete + log
+	- count = 2 -> delete + timeout 1h + log
+	- count >= 3 -> delete + ban + log
+- Logs include structured reason fields: `type=HATE_SPEECH`, `rule=blacklist_match`, `action`, `count`, and `content_hash` (no raw insult text).
+
+## Recommended Stable Defaults
+These defaults aim for a stable and autonomous configuration on small/medium servers.
+
+```yaml
+nuke:
+	enabled: true
+	window_seconds: 20
+	channel_delete: 3
+	channel_create: 5
+	channel_update: 8
+	role_delete: 2
+	role_create: 4
+	role_update: 6
+	webhook_update: 3
+	ban_add: 3
+	guild_update: 2
+	exempt_threshold: 20
+	exempt_window_seconds: 10
+
+playbook:
+	lockdown_slowmode_seconds: 10
+	lockdown_deny_send: true
+
+thresholds:
+	spam_messages: 6
+	spam_window_seconds: 8
+	raid_joins: 6
+	raid_window_seconds: 10
+	phishing_risk: 30
+	burst_links: 3
+	burst_window_seconds: 60
+
+actions:
+	enabled: true
+	timeout_minutes: 10
+```
 
 ## Notes on Actions
 Delete, quarantine, timeout, and ban thresholds are configurable. Enforcement is gated by `ACTIONS_ENABLED`. When enabled, Sentinel can apply timeouts and bans, and add a quarantine role if `QUARANTINE_ROLE_ID` is set. Delete still requires message context and remains logged by default.
 
 ## Notifications
 Warnings are sent as embeds to the security channel and by DM. Audit logs can be mirrored to the security channel. Use `CHANNEL_WARN_ENABLED`, `DM_WARN_ENABLED`, and `AUDIT_TO_CHANNEL` to toggle, and adjust colors using `EMBED_COLOR_ACTION`, `EMBED_COLOR_WARNING`, and `EMBED_COLOR_ERROR`.
+
+## Alerting Model
+- DB remains the source of truth: every event is persisted with `event_id` and `trace_id`.
+- Discord sends only filtered alerts: `INFO` is never sent, `WARN` is sent only when rare/new, `HIGH/CRIT` is sent based on category filters.
+- Real-time Discord events are deduplicated and rate-limited by key `(guild,event,user,reason)`.
+- Digest summaries are posted periodically (default 15 minutes) to the audit channel with top risks, phishing blocks, lockdowns, sanctions, and top blocked domains.
+- Use separate channels: `alerts` for actionable real-time incidents and `audit` for periodic summaries.
 
 ## top.gg Ready
 Recommended scopes:
@@ -85,6 +210,7 @@ Recommended permissions:
 - Manage Messages
 - Moderate Members (for timeouts)
 - Ban Members (optional)
+- Message Content Intent (required for anti-spam/anti-phishing/anti-hate text detection)
 
 Privacy statement: Sentinel Adaptive stores minimal security metadata (guild ID, user ID, event, and timestamp) and respects configurable retention.
 

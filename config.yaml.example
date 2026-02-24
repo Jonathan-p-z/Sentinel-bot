@@ -2,6 +2,7 @@ discord_token: ""
 database_path: "/data/sentinel.db"
 log_level: "info"
 default_security_log_channel: ""
+default_audit_log_channel: ""
 default_language: "fr"
 retention_days: 14
 rule_preset: "medium"
@@ -29,6 +30,21 @@ thresholds:
   burst_links: 3
   burst_window_seconds: 20
 
+nuke:
+  enabled: true
+  window_seconds: 20
+  channel_delete: 3
+  channel_create: 6
+  channel_update: 6
+  role_delete: 3
+  role_create: 6
+  role_update: 6
+  webhook_update: 4
+  ban_add: 3
+  guild_update: 2
+  exempt_threshold: 20
+  exempt_window_seconds: 10
+
 actions:
   enabled: false
   delete: 20
@@ -37,6 +53,32 @@ actions:
   ban: 80
   timeout_minutes: 10
   quarantine_role_id: ""
+
+log:
+  discord_min_level: "HIGH"
+  discord_categories:
+    - "anti_hate"
+    - "anti_phishing"
+    - "anti_spam"
+    - "anti_raid"
+    - "anti_nuke"
+    - "raid_lockdown"
+    - "risk_action"
+    - "action_failed"
+    - "nuke_timeout"
+  discord_rate_limit_seconds: 10
+  digest_interval_minutes: 15
+  alert_cooldown_minutes: 10
+  warn_rare_minutes: 60
+  dedup_window_seconds: 60
+
+hate:
+  enabled: true
+  patterns: []
+  allowlist: []
+  timeout_minutes: 60
+  forgive_after_days: 30
+  delete_in_audit_mode: false
 
 notifications:
   channel_warn_enabled: true
@@ -52,3 +94,5 @@ playbook:
   lockdown_minutes: 15
   strict_mode_minutes: 10
   exit_step_seconds: 20
+  lockdown_slowmode_seconds: 10
+  lockdown_deny_send: true
