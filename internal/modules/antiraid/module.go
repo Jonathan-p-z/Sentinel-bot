@@ -45,15 +45,12 @@ func (m *Module) HandleJoin(ctx context.Context, session *discordgo.Session, eve
 		return false
 	}
 
-	triggered := m.playbook.TriggerLockdown(ctx, guildID)
-	if triggered {
-		userID := ""
-		if event.Member != nil && event.Member.User != nil {
-			userID = event.Member.User.ID
-		}
-		m.audit.Log(ctx, audit.LevelWarn, guildID, userID, "anti_raid", "raid threshold reached")
+	userID := ""
+	if event.Member != nil && event.Member.User != nil {
+		userID = event.Member.User.ID
 	}
-	return triggered
+	m.audit.Log(ctx, audit.LevelWarn, guildID, userID, "anti_raid", "raid threshold reached")
+	return true
 }
 
 func (m *Module) getCounter(guildID string) *utils.JoinCounter {
