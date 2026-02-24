@@ -3,13 +3,16 @@ package bot
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"sentinel-adaptive/internal/analytics"
 	"sentinel-adaptive/internal/config"
+	"sentinel-adaptive/internal/modules/antihate"
 	"sentinel-adaptive/internal/modules/antinuke"
 	"sentinel-adaptive/internal/modules/antiphishing"
 	"sentinel-adaptive/internal/modules/antiraid"
@@ -37,6 +40,7 @@ type Bot struct {
 	analytics      *analytics.Service
 	session        *discordgo.Session
 	antispam       *antispam.Module
+	antihate       *antihate.Module
 	antiraid       *antiraid.Module
 	antiphish      *antiphishing.Module
 	antinuke       *antinuke.Module
@@ -51,6 +55,25 @@ type Bot struct {
 	detectAggMu    sync.Mutex
 	lockdownMu     sync.Mutex
 	lockdownMap    map[string]*lockdownSnapshot
+	discordAggMu   sync.Mutex
+	discordAgg     map[string]*discordEventAggregate
+	warnSeen       map[string]time.Time
+	digestLastSent map[string]time.Time
+	alertStates    map[string]alertState
+	incidentCtx    map[string]incidentContext
+}
+
+type alertState struct {
+	previousSeverity string
+	lastAlertTime    time.Time
+}
+
+type incidentContext struct {
+	incidentType string
+	rule         string
+	value        string
+	threshold    string
+	updatedAt    time.Time
 }
 
 type auditAggregate struct {
@@ -73,6 +96,15 @@ type detectionAggregate struct {
 	count     int
 	lastAt    time.Time
 	lastInfo  string
+}
+
+type discordEventAggregate struct {
+	channelID string
+	messageID string
+	count     int
+	firstSeen time.Time
+	lastSeen  time.Time
+	lastSent  time.Time
 }
 
 type lockdownSnapshot struct {
@@ -100,22 +132,35 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 		discordgo.IntentsGuildVoiceStates
 
 	b := &Bot{
-		cfg:         cfg,
-		logger:      logger,
-		store:       store,
-		risk:        riskEngine,
-		trust:       trustEngine,
-		playbook:    playbookEngine,
-		audit:       auditLogger,
-		analytics:   analyticsEngine,
-		session:     session,
-		auditAgg:    make(map[string]*auditAggregate),
-		warnAgg:     make(map[string]*warningAggregate),
-		detectAgg:   make(map[string]*detectionAggregate),
-		lockdownMap: make(map[string]*lockdownSnapshot),
+		cfg:            cfg,
+		logger:         logger,
+		store:          store,
+		risk:           riskEngine,
+		trust:          trustEngine,
+		playbook:       playbookEngine,
+		audit:          auditLogger,
+		analytics:      analyticsEngine,
+		session:        session,
+		auditAgg:       make(map[string]*auditAggregate),
+		warnAgg:        make(map[string]*warningAggregate),
+		detectAgg:      make(map[string]*detectionAggregate),
+		lockdownMap:    make(map[string]*lockdownSnapshot),
+		discordAgg:     make(map[string]*discordEventAggregate),
+		warnSeen:       make(map[string]time.Time),
+		digestLastSent: make(map[string]time.Time),
+		alertStates:    make(map[string]alertState),
+		incidentCtx:    make(map[string]incidentContext),
 	}
 
 	b.antispam = antispam.New(cfg.Thresholds, riskEngine, auditLogger)
+	b.antihate = antihate.New(antihate.Config{
+		Enabled:           cfg.Hate.Enabled,
+		Patterns:          cfg.Hate.Patterns,
+		Allowlist:         cfg.Hate.Allowlist,
+		TimeoutMinutes:    cfg.Hate.TimeoutMinutes,
+		ForgiveAfterDays:  cfg.Hate.ForgiveAfterDays,
+		DeleteInAuditMode: cfg.Hate.DeleteInAuditMode,
+	}, store, auditLogger)
 	b.antiraid = antiraid.New(cfg.Thresholds, playbookEngine, auditLogger)
 	b.antiphish = antiphishing.New(riskEngine, auditLogger)
 	b.antinuke = antinuke.New(time.Duration(cfg.Nuke.WindowSeconds) * time.Second)
@@ -171,6 +216,13 @@ func (b *Bot) Close(ctx context.Context) {
 
 func (b *Bot) onReady(session *discordgo.Session, event *discordgo.Ready) {
 	b.logger.Info("discord ready", zap.String("user", session.State.User.Username))
+	ctx := context.Background()
+	for _, guild := range event.Guilds {
+		if guild == nil || guild.ID == "" {
+			continue
+		}
+		b.ensureGuildDefaults(ctx, guild.ID)
+	}
 }
 
 func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.MessageCreate) {
@@ -184,6 +236,15 @@ func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.Message
 	ctx := context.Background()
 	settings := b.guildSettings(ctx, msg.GuildID)
 	auditOnly := b.isAuditMode(settings)
+	if settings.AntiHateEnabled && !b.isWhitelisted(ctx, msg.GuildID, msg.Author.ID) {
+		result := b.antihate.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly)
+		if result.Matched {
+			if result.Err != nil {
+				b.audit.Log(ctx, audit.LevelWarn, msg.GuildID, msg.Author.ID, "action_failed", "anti_hate persistence failed")
+			}
+			return
+		}
+	}
 
 	allowlist, blocklist := b.getDomainLists(ctx, msg.GuildID)
 	if _, flagged, detail := b.antiphish.HandleMessage(ctx, session, msg, msg.GuildID, allowlist, blocklist, settings.PhishingRisk, auditOnly); flagged {
@@ -323,7 +384,7 @@ func (b *Bot) handleNukeAction(ctx context.Context, guildID, actorID, action, ta
 		if count != exemptThreshold {
 			return
 		}
-		detail := fmt.Sprintf("action=%s count=%d threshold=%d target=%s exempt=true", action, count, exemptThreshold, targetID)
+		detail := fmt.Sprintf("type=NUKE rule=%s/%ds value=%d/%ds threshold=%d action=%s target=%s exempt=true", action, b.cfg.Nuke.ExemptWindowSeconds, count, b.cfg.Nuke.ExemptWindowSeconds, exemptThreshold, action, targetID)
 		b.audit.Log(ctx, audit.LevelCrit, guildID, actorID, "anti_nuke", detail)
 		b.enterLockdown(ctx, guildID, "anti_nuke_exempt")
 		return
@@ -338,7 +399,7 @@ func (b *Bot) handleNukeAction(ctx context.Context, guildID, actorID, action, ta
 		return
 	}
 
-	detail := fmt.Sprintf("action=%s count=%d threshold=%d target=%s", action, count, threshold, targetID)
+	detail := fmt.Sprintf("type=NUKE rule=%s/%ds value=%d/%ds threshold=%d action=%s target=%s", action, settings.NukeWindowSeconds, count, settings.NukeWindowSeconds, threshold, action, targetID)
 	b.audit.Log(ctx, audit.LevelCrit, guildID, actorID, "anti_nuke", detail)
 	b.enterLockdown(ctx, guildID, "anti_nuke")
 	b.applyNukeSanction(ctx, guildID, actorID)
@@ -619,10 +680,10 @@ func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, scor
 		level = audit.LevelCrit
 	case effective >= actions.Timeout:
 		action = "timeout"
-		level = audit.LevelWarn
+		level = audit.LevelHigh
 	case effective >= actions.Quarantine:
 		action = "quarantine"
-		level = audit.LevelWarn
+		level = audit.LevelHigh
 	case effective >= actions.Delete:
 		action = "delete"
 		level = audit.LevelInfo
@@ -632,9 +693,6 @@ func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, scor
 
 	reason := fmt.Sprintf("action=%s effective=%.1f risk=%.1f trust=%.1f mode=%s", action, effective, score, trustScore, settings.Mode)
 	b.audit.Log(ctx, level, guildID, userID, "risk_action", reason)
-	b.sendSecurityEmbed(ctx, guildID, b.buildActionEmbed(lang, userID, action, score, trustScore, effective, auditOnly))
-	b.sendChannelWarning(ctx, guildID, userID, action, score, trustScore, effective, auditOnly)
-	b.warnUser(userID, b.buildUserWarningEmbed(lang, action, score, trustScore, effective, auditOnly))
 
 	if auditOnly {
 		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "audit_mode", "sanction simulated")
@@ -764,7 +822,7 @@ func (b *Bot) buildActionEmbed(lang, userID, action string, riskScore, trustScor
 	}
 
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "action_title"),
+		Title:       "🚨 " + b.t(lang, "action_title"),
 		Description: b.t(lang, "action_desc"),
 		Color:       b.cfg.Notifications.EmbedColors.Action,
 		Author:      b.embedAuthor(lang),
@@ -845,7 +903,7 @@ func (b *Bot) buildChannelWarningEmbed(lang, userID, action string, riskScore, t
 	)
 
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "warning_title"),
+		Title:       "⚠️ " + b.t(lang, "warning_title"),
 		Description: b.t(lang, "warning_desc_channel"),
 		Color:       b.cfg.Notifications.EmbedColors.Warning,
 		Author:      b.embedAuthor(lang),
@@ -856,7 +914,8 @@ func (b *Bot) buildChannelWarningEmbed(lang, userID, action string, riskScore, t
 }
 
 func (b *Bot) handlePhishingDetection(ctx context.Context, guildID, userID, detail string, auditOnly bool) int {
-	threshold := b.phishingThreshold()
+	_ = ctx
+	_ = auditOnly
 	window := b.phishingWindow()
 	key := guildID + "|" + userID + "|phishing"
 
@@ -871,43 +930,6 @@ func (b *Bot) handlePhishingDetection(ctx context.Context, guildID, userID, deta
 		b.detectAgg[key] = agg
 	}
 	count := agg.count
-	messageID := agg.messageID
-	channelID := agg.channelID
-	b.detectAggMu.Unlock()
-
-	if !b.cfg.Notifications.ChannelWarnEnabled {
-		return count
-	}
-	settings := b.guildSettings(ctx, guildID)
-	channelID = settings.SecurityLogChannel
-	if channelID == "" {
-		channelID = b.cfg.DefaultSecurityLogChannel
-	}
-	if channelID == "" {
-		return count
-	}
-	lang := settings.Language
-	if lang == "" {
-		lang = b.cfg.DefaultLanguage
-	}
-
-	embed := b.buildDetectionWarningEmbed(lang, userID, detail, count, threshold, auditOnly)
-	if messageID != "" && channelID == agg.channelID {
-		if _, err := b.session.ChannelMessageEditEmbed(channelID, messageID, embed); err == nil {
-			return count
-		}
-	}
-
-	msg, err := b.session.ChannelMessageSendEmbed(channelID, embed)
-	if err != nil || msg == nil {
-		return count
-	}
-	b.detectAggMu.Lock()
-	current := b.detectAgg[key]
-	if current != nil {
-		current.channelID = channelID
-		current.messageID = msg.ID
-	}
 	b.detectAggMu.Unlock()
 	return count
 }
@@ -980,30 +1002,129 @@ func (b *Bot) buildErrorEmbed(lang, userID, reason string, err error) *discordgo
 }
 
 func (b *Bot) buildAuditEmbed(lang string, entry storage.AuditLog, count int) *discordgo.MessageEmbed {
-	userValue := "<@" + entry.UserID + ">"
-	if entry.UserID == "" {
-		userValue = b.t(lang, "value_system")
+	_ = count
+	values := b.parseAuditDetailsMap(entry.Details)
+	severity := strings.ToUpper(strings.TrimSpace(entry.Level))
+	if severity == "" {
+		severity = audit.LevelInfo
 	}
-	eventLabel := b.auditEventLabel(lang, entry.Event)
-	formattedDetails := b.formatAuditDetails(lang, entry)
-	fields := []*discordgo.MessageEmbedField{
-		{Name: b.t(lang, "field_event"), Value: eventLabel, Inline: false},
-		{Name: b.t(lang, "audit_level"), Value: entry.Level, Inline: true},
-		{Name: b.t(lang, "field_user"), Value: userValue, Inline: true},
+	emoji := "⚠️"
+	if severity == audit.LevelHigh || severity == audit.LevelCrit || severity == "CRITICAL" {
+		emoji = "🚨"
 	}
-	if count > 1 {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: b.t(lang, "field_count"), Value: fmt.Sprintf("%d", count), Inline: true})
+
+	stateKey := entry.GuildID + "|" + entry.UserID
+	b.discordAggMu.Lock()
+	ctx, hasCtx := b.incidentCtx[stateKey]
+	b.discordAggMu.Unlock()
+
+	incidentType := strings.ToUpper(strings.TrimSpace(values["type"]))
+	rule := strings.TrimSpace(values["rule"])
+	current := strings.TrimSpace(values["value"])
+	threshold := strings.TrimSpace(values["threshold"])
+	if (!hasCtx || time.Since(ctx.updatedAt) > 10*time.Minute) && entry.Event != "risk_action" {
+		incidentType, rule, current, threshold = b.extractIncidentDetails(entry)
+	} else if entry.Event == "risk_action" && hasCtx {
+		if incidentType == "" {
+			incidentType = ctx.incidentType
+		}
+		if rule == "" {
+			rule = ctx.rule
+		}
+		if current == "" {
+			current = ctx.value
+		}
+		if threshold == "" {
+			threshold = ctx.threshold
+		}
 	}
-	fields = append(fields, &discordgo.MessageEmbedField{Name: b.t(lang, "audit_details"), Value: formattedDetails, Inline: false})
+	if incidentType == "" {
+		incidentType = "RISK"
+	}
+	if rule == "" {
+		rule = "-"
+	}
+	if current == "" {
+		current = "-"
+	}
+	if threshold == "" {
+		threshold = "-"
+	}
+
+	riskValue := strings.TrimSpace(values["risk"])
+	trustValue := strings.TrimSpace(values["trust"])
+	effectiveValue := strings.TrimSpace(values["effective"])
+	modeValue := strings.TrimSpace(values["mode"])
+	if modeValue == "" {
+		modeValue = "normal"
+	}
+	if riskValue == "" && entry.UserID != "" {
+		riskValue = fmt.Sprintf("%.1f", b.risk.GetScore(entry.GuildID, entry.UserID))
+	}
+	if trustValue == "" && entry.UserID != "" {
+		trustValue = fmt.Sprintf("%.1f", b.trust.GetScore(entry.GuildID, entry.UserID))
+	}
+	if riskValue == "" {
+		riskValue = "0.0"
+	}
+	if trustValue == "" {
+		trustValue = "0.0"
+	}
+	if effectiveValue == "" {
+		riskFloat, _ := strconv.ParseFloat(riskValue, 64)
+		trustFloat, _ := strconv.ParseFloat(trustValue, 64)
+		effectiveValue = fmt.Sprintf("%.1f", b.risk.EffectiveScore(riskFloat, trustFloat))
+	}
+
+	summary := "Incident de securite detecte"
+	if entry.Event == "risk_action" {
+		actionText := "Action automatique"
+		switch values["action"] {
+		case "delete":
+			actionText = "Suppression automatique"
+		case "timeout":
+			actionText = "Timeout automatique"
+		case "quarantine":
+			actionText = "Quarantaine automatique"
+		case "ban":
+			actionText = "Ban automatique"
+		}
+		target := "@" + b.t(lang, "value_system")
+		if entry.UserID != "" {
+			target = "<@" + entry.UserID + ">"
+		}
+		summary = actionText + " appliquee a " + target
+	}
+
+	footerID := entry.EventID
+	if footerID == "" {
+		footerID = "N/A"
+	}
+
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "audit_title"),
-		Description: b.t(lang, "audit_desc"),
+		Title:       fmt.Sprintf("%s SECURITY INCIDENT — %s", emoji, severity),
+		Description: fmt.Sprintf("%s\nScore effectif: %s\n\nType: %s\nRegle: %s\nValeur: %s\nSeuil: %s", summary, effectiveValue, incidentType, rule, current, threshold),
 		Color:       b.cfg.Notifications.EmbedColors.Action,
-		Author:      b.embedAuthor(lang),
-		Footer:      b.embedFooter(lang),
-		Timestamp:   entry.CreatedAt.Format(time.RFC3339),
-		Fields:      fields,
+		Fields: []*discordgo.MessageEmbedField{
+			{Name: "Risk", Value: riskValue, Inline: true},
+			{Name: "Trust", Value: trustValue, Inline: true},
+			{Name: "Mode", Value: b.modeLabel(lang, modeValue), Inline: true},
+		},
+		Footer: &discordgo.MessageEmbedFooter{Text: "Event ID: " + footerID},
 	}
+}
+
+func (b *Bot) parseAuditDetailsMap(details string) map[string]string {
+	parts := strings.Fields(details)
+	values := make(map[string]string, len(parts))
+	for _, part := range parts {
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		values[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+	}
+	return values
 }
 
 func (b *Bot) auditEventLabel(lang, event string) string {
@@ -1014,6 +1135,8 @@ func (b *Bot) auditEventLabel(lang, event string) string {
 		return b.t(lang, "event_anti_spam")
 	case "anti_raid":
 		return b.t(lang, "event_anti_raid")
+	case "anti_hate":
+		return b.t(lang, "event_anti_hate")
 	case "risk_action":
 		return b.t(lang, "event_risk_action")
 	case "enforcement_disabled":
@@ -1104,10 +1227,7 @@ func (b *Bot) formatAuditDetails(lang string, entry storage.AuditLog) string {
 
 func (b *Bot) notifyAudit(ctx context.Context, entry storage.AuditLog) {
 	settings := b.guildSettings(ctx, entry.GuildID)
-	channelID := settings.SecurityLogChannel
-	if channelID == "" {
-		channelID = b.cfg.DefaultSecurityLogChannel
-	}
+	channelID := b.alertsChannelID(settings)
 	if channelID == "" {
 		return
 	}
@@ -1115,72 +1235,362 @@ func (b *Bot) notifyAudit(ctx context.Context, entry storage.AuditLog) {
 	if lang == "" {
 		lang = b.cfg.DefaultLanguage
 	}
-
-	key := entry.GuildID + "|" + entry.Level + "|" + entry.Event + "|" + entry.Details + "|" + entry.UserID
-	window := 10 * time.Minute
-
-	b.auditAggMu.Lock()
-	agg := b.auditAgg[key]
-	if agg != nil && agg.channelID == channelID && time.Since(agg.lastAt) <= window {
-		agg.count++
-		agg.lastAt = time.Now()
-		count := agg.count
-		messageID := agg.messageID
-		b.auditAggMu.Unlock()
-		embed := b.buildAuditEmbed(lang, entry, count)
-		if _, err := b.session.ChannelMessageEditEmbed(channelID, messageID, embed); err == nil {
-			return
-		}
-		b.auditAggMu.Lock()
-		delete(b.auditAgg, key)
-		b.auditAggMu.Unlock()
-	}
-	b.auditAggMu.Unlock()
-
-	embed := b.buildAuditEmbed(lang, entry, 1)
-	msg, err := b.session.ChannelMessageSendEmbed(channelID, embed)
-	if err != nil || msg == nil {
+	b.updateIncidentContext(entry)
+	if !b.shouldSendDiscordEvent(settings, entry) {
 		return
 	}
-	b.auditAggMu.Lock()
-	b.auditAgg[key] = &auditAggregate{channelID: channelID, messageID: msg.ID, count: 1, lastAt: time.Now()}
-	b.auditAggMu.Unlock()
+
+	severity := strings.ToUpper(strings.TrimSpace(entry.Level))
+	if severity == "" {
+		severity = audit.LevelInfo
+	}
+	stateKey := entry.GuildID + "|" + entry.UserID
+	if !b.shouldAlertState(stateKey, severity, b.settingsAlertCooldownMinutes(settings)) {
+		return
+	}
+
+	embed := b.buildAuditEmbed(lang, entry, 1)
+	if embed == nil {
+		return
+	}
+	_, _ = b.session.ChannelMessageSendEmbed(channelID, embed)
+}
+
+func (b *Bot) shouldSendDiscordEvent(settings storage.GuildSettings, entry storage.AuditLog) bool {
+	level := strings.ToUpper(strings.TrimSpace(entry.Level))
+	if level == audit.LevelInfo {
+		return false
+	}
+	if b.levelRank(level) < b.levelRank(b.settingsDiscordMinLevel(settings)) {
+		return false
+	}
+	if !b.isCategoryAllowed(settings, entry.Event) {
+		return false
+	}
+	return level == audit.LevelWarn || level == audit.LevelHigh || level == audit.LevelCrit || level == "CRITICAL"
+}
+
+func (b *Bot) shouldAlertState(stateKey, severity string, cooldownMinutes int) bool {
+	now := time.Now()
+	cooldown := time.Duration(cooldownMinutes) * time.Minute
+	if cooldown <= 0 {
+		cooldown = 10 * time.Minute
+	}
+	b.discordAggMu.Lock()
+	defer b.discordAggMu.Unlock()
+	state := b.alertStates[stateKey]
+	if state.previousSeverity == "" || state.previousSeverity != severity {
+		b.alertStates[stateKey] = alertState{previousSeverity: severity, lastAlertTime: now}
+		return true
+	}
+	if now.Sub(state.lastAlertTime) >= cooldown {
+		b.alertStates[stateKey] = alertState{previousSeverity: severity, lastAlertTime: now}
+		return true
+	}
+	return false
+}
+
+func (b *Bot) settingsAlertCooldownMinutes(settings storage.GuildSettings) int {
+	_ = settings
+	if b.cfg.Log.AlertCooldownMinutes > 0 {
+		return b.cfg.Log.AlertCooldownMinutes
+	}
+	return 10
+}
+
+func (b *Bot) updateIncidentContext(entry storage.AuditLog) {
+	incidentType, rule, value, threshold := b.extractIncidentDetails(entry)
+	if incidentType == "" {
+		return
+	}
+	key := entry.GuildID + "|" + entry.UserID
+	b.discordAggMu.Lock()
+	b.incidentCtx[key] = incidentContext{
+		incidentType: incidentType,
+		rule:         rule,
+		value:        value,
+		threshold:    threshold,
+		updatedAt:    time.Now(),
+	}
+	b.discordAggMu.Unlock()
+}
+
+func (b *Bot) extractIncidentDetails(entry storage.AuditLog) (string, string, string, string) {
+	values := b.parseAuditDetailsMap(entry.Details)
+	incidentType := strings.ToUpper(strings.TrimSpace(values["type"]))
+	rule := strings.TrimSpace(values["rule"])
+	value := strings.TrimSpace(values["value"])
+	threshold := strings.TrimSpace(values["threshold"])
+	if incidentType != "" {
+		return incidentType, rule, value, threshold
+	}
+	switch entry.Event {
+	case "anti_spam":
+		return "SPAM", rule, value, threshold
+	case "anti_phishing":
+		return "PHISHING", rule, value, threshold
+	case "anti_raid":
+		return "RAID", rule, value, threshold
+	case "anti_hate":
+		return "HATE_SPEECH", rule, value, threshold
+	case "anti_nuke", "nuke_timeout":
+		return "NUKE", rule, value, threshold
+	default:
+		return "", "", "", ""
+	}
+}
+
+func (b *Bot) levelRank(level string) int {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case audit.LevelInfo:
+		return 1
+	case audit.LevelWarn:
+		return 2
+	case audit.LevelHigh:
+		return 3
+	case audit.LevelCrit, "CRITICAL":
+		return 4
+	default:
+		return 1
+	}
+}
+
+func (b *Bot) settingsDiscordMinLevel(settings storage.GuildSettings) string {
+	value := strings.ToUpper(strings.TrimSpace(settings.DiscordMinLevel))
+	if value == "" {
+		value = strings.ToUpper(strings.TrimSpace(b.cfg.Log.DiscordMinLevel))
+	}
+	if value == "" {
+		return audit.LevelHigh
+	}
+	return value
+}
+
+func (b *Bot) settingsDedupWindowSeconds(settings storage.GuildSettings) int {
+	if settings.DedupWindowSeconds > 0 {
+		return settings.DedupWindowSeconds
+	}
+	if b.cfg.Log.DedupWindowSeconds > 0 {
+		return b.cfg.Log.DedupWindowSeconds
+	}
+	return 60
+}
+
+func (b *Bot) settingsDiscordRateLimitSeconds(settings storage.GuildSettings) int {
+	if settings.DiscordRateLimit > 0 {
+		return settings.DiscordRateLimit
+	}
+	if b.cfg.Log.DiscordRateLimitSec > 0 {
+		return b.cfg.Log.DiscordRateLimitSec
+	}
+	return 10
+}
+
+func (b *Bot) settingsWarnRareMinutes(settings storage.GuildSettings) int {
+	if settings.WarnRareMinutes > 0 {
+		return settings.WarnRareMinutes
+	}
+	if b.cfg.Log.WarnRareMinutes > 0 {
+		return b.cfg.Log.WarnRareMinutes
+	}
+	return 60
+}
+
+func (b *Bot) isCategoryAllowed(settings storage.GuildSettings, event string) bool {
+	allowed := map[string]struct{}{}
+	raw := strings.TrimSpace(settings.DiscordCategories)
+	if raw == "" {
+		raw = strings.Join(b.cfg.Log.DiscordCategories, ",")
+	}
+	if raw == "" {
+		return true
+	}
+	for _, part := range strings.Split(raw, ",") {
+		value := strings.TrimSpace(strings.ToLower(part))
+		if value != "" {
+			allowed[value] = struct{}{}
+		}
+	}
+	_, ok := allowed[strings.ToLower(strings.TrimSpace(event))]
+	return ok
+}
+
+func (b *Bot) alertsChannelID(settings storage.GuildSettings) string {
+	if settings.SecurityLogChannel != "" {
+		return settings.SecurityLogChannel
+	}
+	return b.cfg.DefaultSecurityLogChannel
+}
+
+func (b *Bot) auditChannelID(settings storage.GuildSettings) string {
+	if settings.AuditLogChannel != "" {
+		return settings.AuditLogChannel
+	}
+	if b.cfg.DefaultAuditLogChannel != "" {
+		return b.cfg.DefaultAuditLogChannel
+	}
+	return b.alertsChannelID(settings)
+}
+
+func (b *Bot) buildAuditDigestEmbed(lang string, entry storage.AuditLog, count int, window time.Duration) *discordgo.MessageEmbed {
+	base := b.buildAuditEmbed(lang, entry, count)
+	if base == nil {
+		return nil
+	}
+	desc := fmt.Sprintf("%s\nEvent #%s", b.t(lang, "audit_desc"), entry.EventID)
+	if count > 1 {
+		desc = fmt.Sprintf("%s\nEvent #%s — %d occurrences in %ds", b.t(lang, "audit_desc"), entry.EventID, count, int(window.Seconds()))
+	}
+	base.Description = desc
+	return base
 }
 
 func (b *Bot) startDailySummary() {
-	if !b.cfg.Notifications.DailySummary {
+	if !b.cfg.Notifications.DailySummary && b.cfg.Log.DigestIntervalMinutes <= 0 {
 		return
 	}
 	go func() {
 		time.Sleep(30 * time.Second)
-		b.sendDailySummary()
-		ticker := time.NewTicker(24 * time.Hour)
+		b.sendConfiguredDigests()
+		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
-			b.sendDailySummary()
+			b.sendConfiguredDigests()
 		}
 	}()
 }
 
-func (b *Bot) sendDailySummary() {
+func (b *Bot) sendConfiguredDigests() {
 	if b.session == nil || b.session.State == nil {
 		return
 	}
 	ctx := context.Background()
+	now := time.Now()
 	for _, guild := range b.session.State.Guilds {
 		if guild == nil {
 			continue
 		}
 		settings := b.guildSettings(ctx, guild.ID)
-		if settings.SecurityLogChannel == "" && b.cfg.DefaultSecurityLogChannel == "" {
+		channelID := b.auditChannelID(settings)
+		if channelID == "" {
+			continue
+		}
+		intervalMinutes := settings.DigestIntervalMin
+		if intervalMinutes <= 0 {
+			intervalMinutes = b.cfg.Log.DigestIntervalMinutes
+		}
+		if intervalMinutes <= 0 {
+			intervalMinutes = 15
+		}
+		interval := time.Duration(intervalMinutes) * time.Minute
+		last := b.digestLastSent[guild.ID]
+		if !last.IsZero() && now.Sub(last) < interval {
 			continue
 		}
 		lang := settings.Language
 		if lang == "" {
 			lang = b.cfg.DefaultLanguage
 		}
-		b.sendSecurityEmbed(ctx, guild.ID, b.buildDailySummaryEmbed(lang, guild.ID))
+		embed := b.buildDigestSummaryEmbed(ctx, lang, guild.ID, interval)
+		if embed == nil {
+			continue
+		}
+		if _, err := b.session.ChannelMessageSendEmbed(channelID, embed); err == nil {
+			b.digestLastSent[guild.ID] = now
+		}
 	}
+}
+
+func (b *Bot) buildDigestSummaryEmbed(ctx context.Context, lang, guildID string, interval time.Duration) *discordgo.MessageEmbed {
+	since := time.Now().Add(-interval)
+	logs, err := b.store.ListAuditLogs(ctx, guildID, since)
+	if err != nil {
+		return nil
+	}
+	riskLines := b.buildRiskSummaryLines(lang, guildID, 10)
+	phishingCount := 0
+	lockdownCount := 0
+	timeoutCount := 0
+	banCount := 0
+	domains := map[string]int{}
+
+	for _, entry := range logs {
+		switch entry.Event {
+		case "anti_phishing":
+			phishingCount++
+			if strings.HasPrefix(entry.Details, "suspicious link: ") {
+				raw := strings.TrimSpace(strings.TrimPrefix(entry.Details, "suspicious link: "))
+				if parsed, parseErr := url.Parse(raw); parseErr == nil {
+					host := strings.ToLower(parsed.Hostname())
+					if host != "" {
+						domains[host]++
+					}
+				}
+			}
+		case "anti_raid", "raid_lockdown", "anti_nuke":
+			lockdownCount++
+		case "nuke_timeout":
+			timeoutCount++
+		case "risk_action":
+			if strings.Contains(entry.Details, "action=timeout") {
+				timeoutCount++
+			}
+			if strings.Contains(entry.Details, "action=ban") {
+				banCount++
+			}
+		}
+	}
+
+	blockedDomains := b.topBlockedDomains(domains, 5)
+	if blockedDomains == "" {
+		blockedDomains = b.t(lang, "value_none")
+	}
+
+	fields := []*discordgo.MessageEmbedField{
+		{Name: b.t(lang, "digest_field_top_risk"), Value: riskLines, Inline: false},
+		{Name: b.t(lang, "digest_field_phishing"), Value: fmt.Sprintf("%d", phishingCount), Inline: true},
+		{Name: b.t(lang, "digest_field_lockdowns"), Value: fmt.Sprintf("%d", lockdownCount), Inline: true},
+		{Name: b.t(lang, "digest_field_sanctions"), Value: fmt.Sprintf("%d/%d", timeoutCount, banCount), Inline: true},
+		{Name: b.t(lang, "digest_field_domains"), Value: blockedDomains, Inline: false},
+	}
+
+	return &discordgo.MessageEmbed{
+		Title:       "📊 " + b.t(lang, "digest_title"),
+		Description: fmt.Sprintf(b.t(lang, "digest_desc"), int(interval.Minutes())),
+		Color:       b.cfg.Notifications.EmbedColors.Action,
+		Author:      b.embedAuthor(lang),
+		Footer:      b.embedFooter(lang),
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Fields:      fields,
+	}
+}
+
+func (b *Bot) topBlockedDomains(counts map[string]int, limit int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	type pair struct {
+		domain string
+		count  int
+	}
+	items := make([]pair, 0, len(counts))
+	for domain, count := range counts {
+		items = append(items, pair{domain: domain, count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count == items[j].count {
+			return items[i].domain < items[j].domain
+		}
+		return items[i].count > items[j].count
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("%s (%d)", item.domain, item.count))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (b *Bot) buildDailySummaryEmbed(lang, guildID string) *discordgo.MessageEmbed {
@@ -1311,16 +1721,24 @@ func (b *Bot) guildSettings(ctx context.Context, guildID string) storage.GuildSe
 	defaults := storage.GuildSettings{
 		GuildID:            guildID,
 		SecurityLogChannel: b.cfg.DefaultSecurityLogChannel,
+		AuditLogChannel:    b.cfg.DefaultAuditLogChannel,
 		Language:           b.cfg.DefaultLanguage,
 		Mode:               b.cfg.Mode,
 		RulePreset:         b.cfg.RulePreset,
 		RetentionDays:      b.cfg.RetentionDays,
+		DiscordMinLevel:    b.cfg.Log.DiscordMinLevel,
+		DiscordCategories:  strings.Join(b.cfg.Log.DiscordCategories, ","),
+		DiscordRateLimit:   b.cfg.Log.DiscordRateLimitSec,
+		DigestIntervalMin:  b.cfg.Log.DigestIntervalMinutes,
+		WarnRareMinutes:    b.cfg.Log.WarnRareMinutes,
+		DedupWindowSeconds: b.cfg.Log.DedupWindowSeconds,
 		SpamMessages:       b.cfg.Thresholds.SpamMessages,
 		SpamWindowSeconds:  b.cfg.Thresholds.SpamWindowSeconds,
 		RaidJoins:          b.cfg.Thresholds.RaidJoins,
 		RaidWindowSeconds:  b.cfg.Thresholds.RaidWindowSeconds,
 		PhishingRisk:       b.cfg.Thresholds.PhishingRisk,
 		LockdownEnabled:    false,
+		AntiHateEnabled:    b.cfg.Hate.Enabled,
 		NukeEnabled:        b.cfg.Nuke.Enabled,
 		NukeWindowSeconds:  b.cfg.Nuke.WindowSeconds,
 		NukeChannelDelete:  b.cfg.Nuke.ChannelDelete,
@@ -1340,6 +1758,14 @@ func (b *Bot) guildSettings(ctx context.Context, guildID string) storage.GuildSe
 		return defaults
 	}
 	return settings
+}
+
+func (b *Bot) ensureGuildDefaults(ctx context.Context, guildID string) {
+	settings := b.guildSettings(ctx, guildID)
+	settings.GuildID = guildID
+	if err := b.store.UpsertGuildSettings(ctx, settings); err != nil {
+		b.logger.Warn("guild defaults upsert failed", zap.String("guild_id", guildID), zap.Error(err))
+	}
 }
 
 func (b *Bot) isAuditMode(settings storage.GuildSettings) bool {
@@ -1399,10 +1825,7 @@ func (b *Bot) respondEmbed(session *discordgo.Session, interaction *discordgo.In
 
 func (b *Bot) auditToChannel(ctx context.Context, guildID, message string) {
 	settings := b.guildSettings(ctx, guildID)
-	channelID := settings.SecurityLogChannel
-	if channelID == "" {
-		channelID = b.cfg.DefaultSecurityLogChannel
-	}
+	channelID := b.auditChannelID(settings)
 	if channelID == "" {
 		return
 	}
@@ -1410,5 +1833,5 @@ func (b *Bot) auditToChannel(ctx context.Context, guildID, message string) {
 }
 
 func formatReport(report analytics.Report) string {
-	return fmt.Sprintf("Total: %d | INFO: %d | WARN: %d | CRIT: %d", report.Total, report.ByLevel[audit.LevelInfo], report.ByLevel[audit.LevelWarn], report.ByLevel[audit.LevelCrit])
+	return fmt.Sprintf("Total: %d | INFO: %d | WARN: %d | HIGH: %d | CRIT: %d", report.Total, report.ByLevel[audit.LevelInfo], report.ByLevel[audit.LevelWarn], report.ByLevel[audit.LevelHigh], report.ByLevel[audit.LevelCrit])
 }

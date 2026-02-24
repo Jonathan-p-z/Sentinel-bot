@@ -58,25 +58,47 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_status_title"), b.t(lang, "security_status_desc"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 	case "logs":
 		if len(options) == 0 {
-			value := settings.SecurityLogChannel
-			if value == "" {
-				value = b.t(lang, "value_not_set")
+			alerts := settings.SecurityLogChannel
+			if alerts == "" {
+				alerts = b.t(lang, "value_not_set")
 			}
-			fields := []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_channel"), Value: value, Inline: true}}
+			auditChannel := settings.AuditLogChannel
+			if auditChannel == "" {
+				auditChannel = b.t(lang, "value_not_set")
+			}
+			fields := []*discordgo.MessageEmbedField{
+				{Name: "Alerts", Value: alerts, Inline: true},
+				{Name: "Audit", Value: auditChannel, Inline: true},
+			}
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "security_logs_current"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 			return
 		}
-		channel := options[0].ChannelValue(session)
+		logType := "alerts"
+		var channel *discordgo.Channel
+		for _, opt := range options {
+			switch opt.Name {
+			case "type":
+				if value := strings.ToLower(strings.TrimSpace(opt.StringValue())); value != "" {
+					logType = value
+				}
+			case "channel":
+				channel = opt.ChannelValue(session)
+			}
+		}
 		if channel == nil {
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 			return
 		}
-		settings.SecurityLogChannel = channel.ID
+		if logType == "audit" {
+			settings.AuditLogChannel = channel.ID
+		} else {
+			settings.SecurityLogChannel = channel.ID
+		}
 		if err := b.store.UpsertGuildSettings(ctx, settings); err != nil {
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 			return
 		}
-		fields := []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_channel"), Value: "<#" + channel.ID + ">", Inline: true}}
+		fields := []*discordgo.MessageEmbedField{{Name: strings.Title(logType), Value: "<#" + channel.ID + ">", Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "security_logs_updated"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 	case "risk":
 		if len(options) == 0 {
@@ -167,6 +189,7 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 			{Name: b.t(lang, "field_total"), Value: fmt.Sprintf("%d", report.Total), Inline: true},
 			{Name: b.t(lang, "field_info"), Value: fmt.Sprintf("%d", report.ByLevel[audit.LevelInfo]), Inline: true},
 			{Name: b.t(lang, "field_warn"), Value: fmt.Sprintf("%d", report.ByLevel[audit.LevelWarn]), Inline: true},
+			{Name: b.t(lang, "field_high"), Value: fmt.Sprintf("%d", report.ByLevel[audit.LevelHigh]), Inline: true},
 			{Name: b.t(lang, "field_crit"), Value: fmt.Sprintf("%d", report.ByLevel[audit.LevelCrit]), Inline: true},
 		}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_report_title"), b.t(lang, "security_report_desc"), b.cfg.Notifications.EmbedColors.Action, fields), true)
@@ -177,7 +200,7 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 			return
 		}
 		value := options[0].StringValue()
-		if value != "fr" && value != "en" && value != "es" {
+		if value != "fr" && value != "en" && value != "es" && value != "pt" {
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_language_title"), b.t(lang, "error_unknown"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 			return
 		}
@@ -432,6 +455,9 @@ func (b *Bot) handleRulesCommand(ctx context.Context, session *discordgo.Session
 			{Name: b.t(settings.Language, "field_spam"), Value: fmt.Sprintf("%d/%ds", settings.SpamMessages, settings.SpamWindowSeconds), Inline: true},
 			{Name: b.t(settings.Language, "field_raid"), Value: fmt.Sprintf("%d/%ds", settings.RaidJoins, settings.RaidWindowSeconds), Inline: true},
 			{Name: b.t(settings.Language, "field_phishing"), Value: fmt.Sprintf("%d", settings.PhishingRisk), Inline: true},
+			{Name: "Discord Min Level", Value: settings.DiscordMinLevel, Inline: true},
+			{Name: "Discord Rate Limit", Value: fmt.Sprintf("%ds", settings.DiscordRateLimit), Inline: true},
+			{Name: "Digest Interval", Value: fmt.Sprintf("%dmin", settings.DigestIntervalMin), Inline: true},
 		}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_rules_title"), b.t(settings.Language, "security_rules_current"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 		return
@@ -454,6 +480,12 @@ func (b *Bot) handleRulesCommand(ctx context.Context, session *discordgo.Session
 			settings.RaidWindowSeconds = int(opt.IntValue())
 		case "phishing_risk":
 			settings.PhishingRisk = int(opt.IntValue())
+		case "discord_min_level":
+			settings.DiscordMinLevel = strings.ToUpper(opt.StringValue())
+		case "discord_rate_limit_seconds":
+			settings.DiscordRateLimit = int(opt.IntValue())
+		case "digest_interval_minutes":
+			settings.DigestIntervalMin = int(opt.IntValue())
 		}
 	}
 
@@ -465,6 +497,9 @@ func (b *Bot) handleRulesCommand(ctx context.Context, session *discordgo.Session
 		{Name: b.t(settings.Language, "field_spam"), Value: fmt.Sprintf("%d/%ds", settings.SpamMessages, settings.SpamWindowSeconds), Inline: true},
 		{Name: b.t(settings.Language, "field_raid"), Value: fmt.Sprintf("%d/%ds", settings.RaidJoins, settings.RaidWindowSeconds), Inline: true},
 		{Name: b.t(settings.Language, "field_phishing"), Value: fmt.Sprintf("%d", settings.PhishingRisk), Inline: true},
+		{Name: "Discord Min Level", Value: settings.DiscordMinLevel, Inline: true},
+		{Name: "Discord Rate Limit", Value: fmt.Sprintf("%ds", settings.DiscordRateLimit), Inline: true},
+		{Name: "Digest Interval", Value: fmt.Sprintf("%dmin", settings.DigestIntervalMin), Inline: true},
 	}
 	b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_rules_title"), b.t(settings.Language, "security_rules_updated"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 }

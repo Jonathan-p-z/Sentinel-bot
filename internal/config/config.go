@@ -16,6 +16,7 @@ type Config struct {
 	DatabasePath              string         `yaml:"database_path"`
 	LogLevel                  string         `yaml:"log_level"`
 	DefaultSecurityLogChannel string         `yaml:"default_security_log_channel"`
+	DefaultAuditLogChannel    string         `yaml:"default_audit_log_channel"`
 	DefaultLanguage           string         `yaml:"default_language"`
 	RetentionDays             int            `yaml:"retention_days"`
 	RulePreset                string         `yaml:"rule_preset"`
@@ -25,7 +26,9 @@ type Config struct {
 	Trust                     TrustConfig    `yaml:"trust"`
 	Thresholds                Thresholds     `yaml:"thresholds"`
 	Nuke                      NukeConfig     `yaml:"nuke"`
+	Hate                      HateConfig     `yaml:"hate"`
 	Actions                   ActionConfig   `yaml:"actions"`
+	Log                       LogConfig      `yaml:"log"`
 	Notifications             NotifyConfig   `yaml:"notifications"`
 	Playbook                  PlaybookConfig `yaml:"playbook"`
 }
@@ -72,6 +75,15 @@ type NukeConfig struct {
 	ExemptWindowSeconds int  `yaml:"exempt_window_seconds"`
 }
 
+type HateConfig struct {
+	Enabled           bool     `yaml:"enabled"`
+	Patterns          []string `yaml:"patterns"`
+	Allowlist         []string `yaml:"allowlist"`
+	TimeoutMinutes    int      `yaml:"timeout_minutes"`
+	ForgiveAfterDays  int      `yaml:"forgive_after_days"`
+	DeleteInAuditMode bool     `yaml:"delete_in_audit_mode"`
+}
+
 type PlaybookConfig struct {
 	LockdownMinutes   int  `yaml:"lockdown_minutes"`
 	StrictModeMinutes int  `yaml:"strict_mode_minutes"`
@@ -88,6 +100,16 @@ type ActionConfig struct {
 	Ban              float64 `yaml:"ban"`
 	TimeoutMinutes   int     `yaml:"timeout_minutes"`
 	QuarantineRoleID string  `yaml:"quarantine_role_id"`
+}
+
+type LogConfig struct {
+	DiscordMinLevel       string   `yaml:"discord_min_level"`
+	DiscordCategories     []string `yaml:"discord_categories"`
+	DiscordRateLimitSec   int      `yaml:"discord_rate_limit_seconds"`
+	DigestIntervalMinutes int      `yaml:"digest_interval_minutes"`
+	AlertCooldownMinutes  int      `yaml:"alert_cooldown_minutes"`
+	WarnRareMinutes       int      `yaml:"warn_rare_minutes"`
+	DedupWindowSeconds    int      `yaml:"dedup_window_seconds"`
 }
 
 type NotifyConfig struct {
@@ -112,6 +134,7 @@ func DefaultConfig() Config {
 		RulePreset:                "medium",
 		Mode:                      "normal",
 		DefaultSecurityLogChannel: "",
+		DefaultAuditLogChannel:    "",
 		DefaultLanguage:           "fr",
 		Health:                    HealthConfig{Enabled: false, Addr: ":8080"},
 		Risk:                      RiskConfig{DecayPerMinute: 0.5, TTLMinutes: 60, TrustWeight: 0.5},
@@ -140,6 +163,14 @@ func DefaultConfig() Config {
 			ExemptThreshold:     20,
 			ExemptWindowSeconds: 10,
 		},
+		Hate: HateConfig{
+			Enabled:           true,
+			Patterns:          []string{},
+			Allowlist:         []string{},
+			TimeoutMinutes:    60,
+			ForgiveAfterDays:  30,
+			DeleteInAuditMode: false,
+		},
 		Actions: ActionConfig{
 			Enabled:          false,
 			Delete:           20,
@@ -148,6 +179,15 @@ func DefaultConfig() Config {
 			Ban:              80,
 			TimeoutMinutes:   10,
 			QuarantineRoleID: "",
+		},
+		Log: LogConfig{
+			DiscordMinLevel:       "HIGH",
+			DiscordCategories:     []string{"anti_hate", "anti_phishing", "anti_spam", "anti_raid", "anti_nuke", "raid_lockdown", "risk_action", "action_failed", "nuke_timeout"},
+			DiscordRateLimitSec:   10,
+			DigestIntervalMinutes: 15,
+			AlertCooldownMinutes:  10,
+			WarnRareMinutes:       60,
+			DedupWindowSeconds:    60,
 		},
 		Notifications: NotifyConfig{
 			ChannelWarnEnabled: true,
@@ -194,6 +234,7 @@ func applyEnv(cfg *Config) {
 	cfg.DatabasePath = envString("DATABASE_PATH", cfg.DatabasePath)
 	cfg.LogLevel = envString("LOG_LEVEL", cfg.LogLevel)
 	cfg.DefaultSecurityLogChannel = envString("DEFAULT_SECURITY_LOG_CHANNEL", cfg.DefaultSecurityLogChannel)
+	cfg.DefaultAuditLogChannel = envString("DEFAULT_AUDIT_LOG_CHANNEL", cfg.DefaultAuditLogChannel)
 	cfg.DefaultLanguage = envString("DEFAULT_LANGUAGE", cfg.DefaultLanguage)
 	cfg.RetentionDays = envInt("RETENTION_DAYS", cfg.RetentionDays)
 	cfg.RulePreset = envString("RULE_PRESET", cfg.RulePreset)
@@ -220,9 +261,49 @@ func applyEnv(cfg *Config) {
 	cfg.Nuke.GuildUpdate = envInt("NUKE_GUILD_UPDATE", cfg.Nuke.GuildUpdate)
 	cfg.Nuke.ExemptThreshold = envInt("NUKE_EXEMPT_THRESHOLD", cfg.Nuke.ExemptThreshold)
 	cfg.Nuke.ExemptWindowSeconds = envInt("NUKE_EXEMPT_WINDOW_SECONDS", cfg.Nuke.ExemptWindowSeconds)
+	cfg.Hate.Enabled = envBool("HATE_ENABLED", cfg.Hate.Enabled)
+	cfg.Hate.TimeoutMinutes = envInt("HATE_TIMEOUT_MINUTES", cfg.Hate.TimeoutMinutes)
+	cfg.Hate.ForgiveAfterDays = envInt("HATE_FORGIVE_AFTER_DAYS", cfg.Hate.ForgiveAfterDays)
+	cfg.Hate.DeleteInAuditMode = envBool("HATE_DELETE_IN_AUDIT_MODE", cfg.Hate.DeleteInAuditMode)
+	if patterns := envString("HATE_PATTERNS", ""); patterns != "" {
+		parts := strings.Split(patterns, ",")
+		cfg.Hate.Patterns = cfg.Hate.Patterns[:0]
+		for _, part := range parts {
+			value := strings.TrimSpace(part)
+			if value != "" {
+				cfg.Hate.Patterns = append(cfg.Hate.Patterns, value)
+			}
+		}
+	}
+	if allowlist := envString("HATE_ALLOWLIST", ""); allowlist != "" {
+		parts := strings.Split(allowlist, ",")
+		cfg.Hate.Allowlist = cfg.Hate.Allowlist[:0]
+		for _, part := range parts {
+			value := strings.TrimSpace(part)
+			if value != "" {
+				cfg.Hate.Allowlist = append(cfg.Hate.Allowlist, value)
+			}
+		}
+	}
 	cfg.Actions.Enabled = envBool("ACTIONS_ENABLED", cfg.Actions.Enabled)
 	cfg.Actions.TimeoutMinutes = envInt("ACTIONS_TIMEOUT_MINUTES", cfg.Actions.TimeoutMinutes)
 	cfg.Actions.QuarantineRoleID = envString("QUARANTINE_ROLE_ID", cfg.Actions.QuarantineRoleID)
+	cfg.Log.DiscordMinLevel = envString("LOG_DISCORD_MIN_LEVEL", cfg.Log.DiscordMinLevel)
+	cfg.Log.DiscordRateLimitSec = envInt("LOG_DISCORD_RATE_LIMIT_SECONDS", cfg.Log.DiscordRateLimitSec)
+	cfg.Log.DigestIntervalMinutes = envInt("LOG_DIGEST_INTERVAL_MINUTES", cfg.Log.DigestIntervalMinutes)
+	cfg.Log.AlertCooldownMinutes = envInt("LOG_ALERT_COOLDOWN_MINUTES", cfg.Log.AlertCooldownMinutes)
+	cfg.Log.WarnRareMinutes = envInt("LOG_WARN_RARE_MINUTES", cfg.Log.WarnRareMinutes)
+	cfg.Log.DedupWindowSeconds = envInt("LOG_DEDUP_WINDOW_SECONDS", cfg.Log.DedupWindowSeconds)
+	if categories := envString("LOG_DISCORD_CATEGORIES", ""); categories != "" {
+		parts := strings.Split(categories, ",")
+		cfg.Log.DiscordCategories = cfg.Log.DiscordCategories[:0]
+		for _, part := range parts {
+			value := strings.TrimSpace(strings.ToLower(part))
+			if value != "" {
+				cfg.Log.DiscordCategories = append(cfg.Log.DiscordCategories, value)
+			}
+		}
+	}
 	cfg.Notifications.ChannelWarnEnabled = envBool("CHANNEL_WARN_ENABLED", cfg.Notifications.ChannelWarnEnabled)
 	cfg.Notifications.DMWarnEnabled = envBool("DM_WARN_ENABLED", cfg.Notifications.DMWarnEnabled)
 	cfg.Notifications.AuditToChannel = envBool("AUDIT_TO_CHANNEL", cfg.Notifications.AuditToChannel)

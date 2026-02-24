@@ -17,10 +17,13 @@ import (
 	"sentinel-adaptive/internal/storage"
 	"sentinel-adaptive/internal/trust"
 
+	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 )
 
 func main() {
+	_ = godotenv.Load(".env")
+
 	cfg, err := config.Load()
 	if err != nil {
 		panic(err)

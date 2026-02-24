@@ -171,6 +171,44 @@ func (b *Bot) registerCommands() error {
 					},
 					Required: false,
 				},
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "discord_min_level",
+					Description: "WARN, HIGH or CRIT",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "WARN, HIGH ou CRIT",
+						discordgo.EnglishUS: "WARN, HIGH or CRIT",
+						discordgo.SpanishES: "WARN, HIGH o CRIT",
+					},
+					Required: false,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "WARN", Value: "WARN"},
+						{Name: "HIGH", Value: "HIGH"},
+						{Name: "CRIT", Value: "CRIT"},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "discord_rate_limit_seconds",
+					Description: "discord rate limit in seconds",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "rate limit discord en secondes",
+						discordgo.EnglishUS: "discord rate limit in seconds",
+						discordgo.SpanishES: "rate limit de discord en segundos",
+					},
+					Required: false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "digest_interval_minutes",
+					Description: "digest interval in minutes",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "intervalle digest en minutes",
+						discordgo.EnglishUS: "digest interval in minutes",
+						discordgo.SpanishES: "intervalo de digest en minutos",
+					},
+					Required: false,
+				},
 			},
 		},
 		{
@@ -264,17 +302,18 @@ func (b *Bot) registerCommands() error {
 				{
 					Type:        discordgo.ApplicationCommandOptionString,
 					Name:        "value",
-					Description: "fr, en, es",
+					Description: "fr, en, es, pt",
 					DescriptionLocalizations: map[discordgo.Locale]string{
-						discordgo.French:    "fr, en, es",
-						discordgo.EnglishUS: "fr, en, es",
-						discordgo.SpanishES: "fr, en, es",
+						discordgo.French:    "fr, en, es, pt",
+						discordgo.EnglishUS: "fr, en, es, pt",
+						discordgo.SpanishES: "fr, en, es, pt",
 					},
 					Required: false,
 					Choices: []*discordgo.ApplicationCommandOptionChoice{
 						{Name: "fr", Value: "fr"},
 						{Name: "en", Value: "en"},
 						{Name: "es", Value: "es"},
+						{Name: "pt", Value: "pt"},
 					},
 				},
 			},
@@ -320,21 +359,36 @@ func (b *Bot) registerCommands() error {
 		},
 		{
 			Name:        "logs",
-			Description: "Set security log channel",
+			Description: "Set alerts/audit log channels",
 			DescriptionLocalizations: &map[discordgo.Locale]string{
-				discordgo.French:    "Definir le salon des logs",
-				discordgo.EnglishUS: "Set security log channel",
-				discordgo.SpanishES: "Definir canal de logs",
+				discordgo.French:    "Definir les salons alerts/audit",
+				discordgo.EnglishUS: "Set alerts/audit log channels",
+				discordgo.SpanishES: "Definir canales alerts/audit",
 			},
 			Options: []*discordgo.ApplicationCommandOption{
 				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "type",
+					Description: "alerts or audit",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "alerts ou audit",
+						discordgo.EnglishUS: "alerts or audit",
+						discordgo.SpanishES: "alerts o audit",
+					},
+					Required: false,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "alerts", Value: "alerts"},
+						{Name: "audit", Value: "audit"},
+					},
+				},
+				{
 					Type:        discordgo.ApplicationCommandOptionChannel,
 					Name:        "channel",
-					Description: "admin-only channel",
+					Description: "target channel",
 					DescriptionLocalizations: map[discordgo.Locale]string{
-						discordgo.French:    "salon admin-only",
-						discordgo.EnglishUS: "admin-only channel",
-						discordgo.SpanishES: "canal solo admins",
+						discordgo.French:    "salon cible",
+						discordgo.EnglishUS: "target channel",
+						discordgo.SpanishES: "canal objetivo",
 					},
 					Required: false,
 				},
