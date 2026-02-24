@@ -2,6 +2,7 @@ package antiraid
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -49,7 +50,8 @@ func (m *Module) HandleJoin(ctx context.Context, session *discordgo.Session, eve
 	if event.Member != nil && event.Member.User != nil {
 		userID = event.Member.User.ID
 	}
-	m.audit.Log(ctx, audit.LevelWarn, guildID, userID, "anti_raid", "raid threshold reached")
+	detail := fmt.Sprintf("type=RAID rule=%djoins/%ds value=%djoins/%ds threshold=%d", m.config.RaidJoins, m.config.RaidWindowSeconds, count, m.config.RaidWindowSeconds, m.config.RaidJoins)
+	m.audit.Log(ctx, audit.LevelWarn, guildID, userID, "anti_raid", detail)
 	return true
 }
 

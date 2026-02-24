@@ -2,6 +2,10 @@ package audit
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"strings"
 	"time"
 
 	"sentinel-adaptive/internal/storage"
@@ -12,6 +16,7 @@ import (
 const (
 	LevelInfo = "INFO"
 	LevelWarn = "WARN"
+	LevelHigh = "HIGH"
 	LevelCrit = "CRIT"
 )
 
@@ -30,13 +35,17 @@ func (l *Logger) SetNotifier(notify func(context.Context, storage.AuditLog)) {
 }
 
 func (l *Logger) Log(ctx context.Context, level, guildID, userID, event, details string) {
+	traceID := newEventID()
 	entry := storage.AuditLog{
-		GuildID:   guildID,
-		UserID:    userID,
-		Level:     level,
-		Event:     event,
-		Details:   details,
-		CreatedAt: time.Now(),
+		EventID:     newEventID(),
+		TraceID:     traceID,
+		GuildID:     guildID,
+		UserID:      userID,
+		Level:       level,
+		Event:       event,
+		Details:     details,
+		DetailsJSON: fmt.Sprintf(`{"event":"%s","user_id":"%s","details":%q}`, event, userID, details),
+		CreatedAt:   time.Now(),
 	}
 	if l.store != nil {
 		_ = l.store.AddAuditLog(ctx, entry)
@@ -45,4 +54,12 @@ func (l *Logger) Log(ctx context.Context, level, guildID, userID, event, details
 		l.notify(ctx, entry)
 	}
 	l.logger.Info("audit", zap.String("level", level), zap.String("guild_id", guildID), zap.String("user_id", userID), zap.String("event", event), zap.String("details", details))
+}
+
+func newEventID() string {
+	buf := make([]byte, 4)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("E%X", time.Now().UnixNano())
+	}
+	return strings.ToUpper(hex.EncodeToString(buf))
 }

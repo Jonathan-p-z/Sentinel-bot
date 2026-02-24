@@ -2,6 +2,7 @@ package antispam
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -39,7 +40,8 @@ func (m *Module) HandleMessage(ctx context.Context, session *discordgo.Session, 
 	}
 
 	score := m.risk.AddRisk(guildID, msg.Author.ID, 12)
-	m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_spam", "message burst detected")
+	detail := fmt.Sprintf("type=SPAM rule=%dmsg/%ds value=%dmsg/%ds threshold=%d", m.config.SpamMessages, m.config.SpamWindowSeconds, count, m.config.SpamWindowSeconds, m.config.SpamMessages)
+	m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_spam", detail)
 
 	if !auditOnly {
 		_ = session.ChannelMessageDelete(msg.ChannelID, msg.ID)

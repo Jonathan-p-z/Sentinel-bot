@@ -2,6 +2,7 @@ package antiphishing
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"sentinel-adaptive/internal/modules/audit"
@@ -43,7 +44,11 @@ func (m *Module) HandleMessage(ctx context.Context, session *discordgo.Session, 
 		if blocked || hasKeywords(msg.Content) {
 			suspicious = true
 			detail = "suspicious link: " + normalized
-			m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_phishing", detail)
+			rule := "domain_or_keyword"
+			current := "1link"
+			threshold := "1"
+			auditDetail := fmt.Sprintf("type=PHISHING rule=%s value=%s threshold=%s url=%s", rule, current, threshold, normalized)
+			m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_phishing", auditDetail)
 			break
 		}
 	}
