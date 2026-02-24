@@ -1,0 +1,11 @@
+ALTER TABLE guild_settings ADD COLUMN nuke_enabled INTEGER DEFAULT 1;
+ALTER TABLE guild_settings ADD COLUMN nuke_window_seconds INTEGER DEFAULT 20;
+ALTER TABLE guild_settings ADD COLUMN nuke_channel_delete INTEGER DEFAULT 3;
+ALTER TABLE guild_settings ADD COLUMN nuke_channel_create INTEGER DEFAULT 6;
+ALTER TABLE guild_settings ADD COLUMN nuke_channel_update INTEGER DEFAULT 6;
+ALTER TABLE guild_settings ADD COLUMN nuke_role_delete INTEGER DEFAULT 3;
+ALTER TABLE guild_settings ADD COLUMN nuke_role_create INTEGER DEFAULT 6;
+ALTER TABLE guild_settings ADD COLUMN nuke_role_update INTEGER DEFAULT 6;
+ALTER TABLE guild_settings ADD COLUMN nuke_webhook_update INTEGER DEFAULT 4;
+ALTER TABLE guild_settings ADD COLUMN nuke_ban_add INTEGER DEFAULT 3;
+ALTER TABLE guild_settings ADD COLUMN nuke_guild_update INTEGER DEFAULT 2;

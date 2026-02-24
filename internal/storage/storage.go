@@ -34,6 +34,17 @@ type GuildSettings struct {
 	RaidWindowSeconds  int
 	PhishingRisk       int
 	LockdownEnabled    bool
+	NukeEnabled        bool
+	NukeWindowSeconds  int
+	NukeChannelDelete  int
+	NukeChannelCreate  int
+	NukeChannelUpdate  int
+	NukeRoleDelete     int
+	NukeRoleCreate     int
+	NukeRoleUpdate     int
+	NukeWebhookUpdate  int
+	NukeBanAdd         int
+	NukeGuildUpdate    int
 }
 
 type AuditLog struct {
@@ -91,13 +102,17 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 	row := s.db.QueryRowContext(ctx, `
 		SELECT security_log_channel, language, mode, rule_preset, retention_days,
 		spam_messages, spam_window_seconds, raid_joins, raid_window_seconds,
-		phishing_risk, lockdown_enabled
+		phishing_risk, lockdown_enabled,
+		nuke_enabled, nuke_window_seconds, nuke_channel_delete, nuke_channel_create,
+		nuke_channel_update, nuke_role_delete, nuke_role_create, nuke_role_update,
+		nuke_webhook_update, nuke_ban_add, nuke_guild_update
 		FROM guild_settings WHERE guild_id = ?`, guildID)
 
 	result := defaults
 	result.GuildID = guildID
 
 	var lockdown int
+	var nukeEnabled int
 	err := row.Scan(
 		&result.SecurityLogChannel,
 		&result.Language,
@@ -110,6 +125,17 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 		&result.RaidWindowSeconds,
 		&result.PhishingRisk,
 		&lockdown,
+		&nukeEnabled,
+		&result.NukeWindowSeconds,
+		&result.NukeChannelDelete,
+		&result.NukeChannelCreate,
+		&result.NukeChannelUpdate,
+		&result.NukeRoleDelete,
+		&result.NukeRoleCreate,
+		&result.NukeRoleUpdate,
+		&result.NukeWebhookUpdate,
+		&result.NukeBanAdd,
+		&result.NukeGuildUpdate,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -118,6 +144,7 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 		return GuildSettings{}, err
 	}
 	result.LockdownEnabled = lockdown == 1
+	result.NukeEnabled = nukeEnabled == 1
 	if result.Language == "" {
 		result.Language = defaults.Language
 	}
@@ -129,8 +156,11 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 		INSERT INTO guild_settings (
 			guild_id, security_log_channel, language, mode, rule_preset, retention_days,
 			spam_messages, spam_window_seconds, raid_joins, raid_window_seconds,
-			phishing_risk, lockdown_enabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			phishing_risk, lockdown_enabled,
+			nuke_enabled, nuke_window_seconds, nuke_channel_delete, nuke_channel_create,
+			nuke_channel_update, nuke_role_delete, nuke_role_create, nuke_role_update,
+			nuke_webhook_update, nuke_ban_add, nuke_guild_update
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(guild_id) DO UPDATE SET
 			security_log_channel = excluded.security_log_channel,
 			language = excluded.language,
@@ -142,7 +172,18 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 			raid_joins = excluded.raid_joins,
 			raid_window_seconds = excluded.raid_window_seconds,
 			phishing_risk = excluded.phishing_risk,
-			lockdown_enabled = excluded.lockdown_enabled
+			lockdown_enabled = excluded.lockdown_enabled,
+			nuke_enabled = excluded.nuke_enabled,
+			nuke_window_seconds = excluded.nuke_window_seconds,
+			nuke_channel_delete = excluded.nuke_channel_delete,
+			nuke_channel_create = excluded.nuke_channel_create,
+			nuke_channel_update = excluded.nuke_channel_update,
+			nuke_role_delete = excluded.nuke_role_delete,
+			nuke_role_create = excluded.nuke_role_create,
+			nuke_role_update = excluded.nuke_role_update,
+			nuke_webhook_update = excluded.nuke_webhook_update,
+			nuke_ban_add = excluded.nuke_ban_add,
+			nuke_guild_update = excluded.nuke_guild_update
 	`,
 		settings.GuildID,
 		settings.SecurityLogChannel,
@@ -156,6 +197,17 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 		settings.RaidWindowSeconds,
 		settings.PhishingRisk,
 		boolToInt(settings.LockdownEnabled),
+		boolToInt(settings.NukeEnabled),
+		settings.NukeWindowSeconds,
+		settings.NukeChannelDelete,
+		settings.NukeChannelCreate,
+		settings.NukeChannelUpdate,
+		settings.NukeRoleDelete,
+		settings.NukeRoleCreate,
+		settings.NukeRoleUpdate,
+		settings.NukeWebhookUpdate,
+		settings.NukeBanAdd,
+		settings.NukeGuildUpdate,
 	)
 	return err
 }
@@ -225,6 +277,62 @@ func (s *Store) ListDomainAllow(ctx context.Context, guildID string) ([]string, 
 		domains = append(domains, domain)
 	}
 	return domains, rows.Err()
+}
+
+func (s *Store) AddWhitelistUser(ctx context.Context, guildID, userID string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO whitelist_users (guild_id, user_id, created_at) VALUES (?, ?, ?)`, guildID, userID, time.Now().Unix())
+	return err
+}
+
+func (s *Store) RemoveWhitelistUser(ctx context.Context, guildID, userID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM whitelist_users WHERE guild_id = ? AND user_id = ?`, guildID, userID)
+	return err
+}
+
+func (s *Store) ListWhitelistUsers(ctx context.Context, guildID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id FROM whitelist_users WHERE guild_id = ? ORDER BY user_id`, guildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []string
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		users = append(users, userID)
+	}
+	return users, rows.Err()
+}
+
+func (s *Store) AddWhitelistRole(ctx context.Context, guildID, roleID string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO whitelist_roles (guild_id, role_id, created_at) VALUES (?, ?, ?)`, guildID, roleID, time.Now().Unix())
+	return err
+}
+
+func (s *Store) RemoveWhitelistRole(ctx context.Context, guildID, roleID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM whitelist_roles WHERE guild_id = ? AND role_id = ?`, guildID, roleID)
+	return err
+}
+
+func (s *Store) ListWhitelistRoles(ctx context.Context, guildID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT role_id FROM whitelist_roles WHERE guild_id = ? ORDER BY role_id`, guildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var roles []string
+	for rows.Next() {
+		var roleID string
+		if err := rows.Scan(&roleID); err != nil {
+			return nil, err
+		}
+		roles = append(roles, roleID)
+	}
+	return roles, rows.Err()
 }
 
 func (s *Store) AddDomainBlock(ctx context.Context, guildID, domain string) error {
