@@ -24,16 +24,24 @@ type Store struct {
 type GuildSettings struct {
 	GuildID            string
 	SecurityLogChannel string
+	AuditLogChannel    string
 	Language           string
 	Mode               string
 	RulePreset         string
 	RetentionDays      int
+	DiscordMinLevel    string
+	DiscordCategories  string
+	DiscordRateLimit   int
+	DigestIntervalMin  int
+	WarnRareMinutes    int
+	DedupWindowSeconds int
 	SpamMessages       int
 	SpamWindowSeconds  int
 	RaidJoins          int
 	RaidWindowSeconds  int
 	PhishingRisk       int
 	LockdownEnabled    bool
+	AntiHateEnabled    bool
 	NukeEnabled        bool
 	NukeWindowSeconds  int
 	NukeChannelDelete  int
@@ -48,13 +56,16 @@ type GuildSettings struct {
 }
 
 type AuditLog struct {
-	ID        int64
-	GuildID   string
-	UserID    string
-	Level     string
-	Event     string
-	Details   string
-	CreatedAt time.Time
+	ID          int64
+	EventID     string
+	TraceID     string
+	GuildID     string
+	UserID      string
+	Level       string
+	Event       string
+	Details     string
+	DetailsJSON string
+	CreatedAt   time.Time
 }
 
 func New(dbPath string) (*Store, error) {
@@ -100,9 +111,10 @@ func (s *Store) Migrate() error {
 
 func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults GuildSettings) (GuildSettings, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT security_log_channel, language, mode, rule_preset, retention_days,
+		SELECT security_log_channel, audit_log_channel, language, mode, rule_preset, retention_days,
+		discord_min_level, discord_categories, discord_rate_limit_seconds, digest_interval_minutes, warn_rare_minutes, dedup_window_seconds,
 		spam_messages, spam_window_seconds, raid_joins, raid_window_seconds,
-		phishing_risk, lockdown_enabled,
+		phishing_risk, lockdown_enabled, anti_hate_enabled,
 		nuke_enabled, nuke_window_seconds, nuke_channel_delete, nuke_channel_create,
 		nuke_channel_update, nuke_role_delete, nuke_role_create, nuke_role_update,
 		nuke_webhook_update, nuke_ban_add, nuke_guild_update
@@ -112,19 +124,28 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 	result.GuildID = guildID
 
 	var lockdown int
+	var antiHateEnabled int
 	var nukeEnabled int
 	err := row.Scan(
 		&result.SecurityLogChannel,
+		&result.AuditLogChannel,
 		&result.Language,
 		&result.Mode,
 		&result.RulePreset,
 		&result.RetentionDays,
+		&result.DiscordMinLevel,
+		&result.DiscordCategories,
+		&result.DiscordRateLimit,
+		&result.DigestIntervalMin,
+		&result.WarnRareMinutes,
+		&result.DedupWindowSeconds,
 		&result.SpamMessages,
 		&result.SpamWindowSeconds,
 		&result.RaidJoins,
 		&result.RaidWindowSeconds,
 		&result.PhishingRisk,
 		&lockdown,
+		&antiHateEnabled,
 		&nukeEnabled,
 		&result.NukeWindowSeconds,
 		&result.NukeChannelDelete,
@@ -144,6 +165,7 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 		return GuildSettings{}, err
 	}
 	result.LockdownEnabled = lockdown == 1
+	result.AntiHateEnabled = antiHateEnabled == 1
 	result.NukeEnabled = nukeEnabled == 1
 	if result.Language == "" {
 		result.Language = defaults.Language
@@ -154,25 +176,34 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO guild_settings (
-			guild_id, security_log_channel, language, mode, rule_preset, retention_days,
+			guild_id, security_log_channel, audit_log_channel, language, mode, rule_preset, retention_days,
+			discord_min_level, discord_categories, discord_rate_limit_seconds, digest_interval_minutes, warn_rare_minutes, dedup_window_seconds,
 			spam_messages, spam_window_seconds, raid_joins, raid_window_seconds,
-			phishing_risk, lockdown_enabled,
+			phishing_risk, lockdown_enabled, anti_hate_enabled,
 			nuke_enabled, nuke_window_seconds, nuke_channel_delete, nuke_channel_create,
 			nuke_channel_update, nuke_role_delete, nuke_role_create, nuke_role_update,
 			nuke_webhook_update, nuke_ban_add, nuke_guild_update
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(guild_id) DO UPDATE SET
 			security_log_channel = excluded.security_log_channel,
+			audit_log_channel = excluded.audit_log_channel,
 			language = excluded.language,
 			mode = excluded.mode,
 			rule_preset = excluded.rule_preset,
 			retention_days = excluded.retention_days,
+			discord_min_level = excluded.discord_min_level,
+			discord_categories = excluded.discord_categories,
+			discord_rate_limit_seconds = excluded.discord_rate_limit_seconds,
+			digest_interval_minutes = excluded.digest_interval_minutes,
+			warn_rare_minutes = excluded.warn_rare_minutes,
+			dedup_window_seconds = excluded.dedup_window_seconds,
 			spam_messages = excluded.spam_messages,
 			spam_window_seconds = excluded.spam_window_seconds,
 			raid_joins = excluded.raid_joins,
 			raid_window_seconds = excluded.raid_window_seconds,
 			phishing_risk = excluded.phishing_risk,
 			lockdown_enabled = excluded.lockdown_enabled,
+			anti_hate_enabled = excluded.anti_hate_enabled,
 			nuke_enabled = excluded.nuke_enabled,
 			nuke_window_seconds = excluded.nuke_window_seconds,
 			nuke_channel_delete = excluded.nuke_channel_delete,
@@ -187,16 +218,24 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 	`,
 		settings.GuildID,
 		settings.SecurityLogChannel,
+		settings.AuditLogChannel,
 		settings.Language,
 		settings.Mode,
 		settings.RulePreset,
 		settings.RetentionDays,
+		settings.DiscordMinLevel,
+		settings.DiscordCategories,
+		settings.DiscordRateLimit,
+		settings.DigestIntervalMin,
+		settings.WarnRareMinutes,
+		settings.DedupWindowSeconds,
 		settings.SpamMessages,
 		settings.SpamWindowSeconds,
 		settings.RaidJoins,
 		settings.RaidWindowSeconds,
 		settings.PhishingRisk,
 		boolToInt(settings.LockdownEnabled),
+		boolToInt(settings.AntiHateEnabled),
 		boolToInt(settings.NukeEnabled),
 		settings.NukeWindowSeconds,
 		settings.NukeChannelDelete,
@@ -214,15 +253,15 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 
 func (s *Store) AddAuditLog(ctx context.Context, log AuditLog) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO audit_logs (guild_id, user_id, level, event, details, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, log.GuildID, log.UserID, log.Level, log.Event, log.Details, log.CreatedAt.Unix())
+		INSERT INTO audit_logs (event_id, trace_id, guild_id, user_id, level, event, details, details_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, log.EventID, log.TraceID, log.GuildID, log.UserID, log.Level, log.Event, log.Details, log.DetailsJSON, log.CreatedAt.Unix())
 	return err
 }
 
 func (s *Store) ListAuditLogs(ctx context.Context, guildID string, since time.Time) ([]AuditLog, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, guild_id, user_id, level, event, details, created_at
+		SELECT id, event_id, trace_id, guild_id, user_id, level, event, details, details_json, created_at
 		FROM audit_logs
 		WHERE guild_id = ? AND created_at >= ?
 		ORDER BY created_at DESC
@@ -236,7 +275,7 @@ func (s *Store) ListAuditLogs(ctx context.Context, guildID string, since time.Ti
 	for rows.Next() {
 		var log AuditLog
 		var created int64
-		if err := rows.Scan(&log.ID, &log.GuildID, &log.UserID, &log.Level, &log.Event, &log.Details, &created); err != nil {
+		if err := rows.Scan(&log.ID, &log.EventID, &log.TraceID, &log.GuildID, &log.UserID, &log.Level, &log.Event, &log.Details, &log.DetailsJSON, &created); err != nil {
 			return nil, err
 		}
 		log.CreatedAt = time.Unix(created, 0)
