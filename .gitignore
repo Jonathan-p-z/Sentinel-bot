@@ -1,0 +1,64 @@
+# Env and secrets
+.env
+.env.*
+.envrc
+!.env.example
+
+# Local configs
+config.yaml
+config.yaml.local
+config.yaml.*
+!config.yaml.example
+
+# Sensitive files
+secrets.yml
+secrets.yaml
+secrets.json
+credentials.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.kdb
+*.kdbx
+*.crt
+*.cer
+*.der
+id_rsa
+id_ed25519
+
+# Databases and data
+*.db
+*.sqlite
+*.sqlite3
+data/
+/data/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+bin/
+*.exe
+*.out
+
+# Go workspace
+.go.work
+.go.work.sum
+
+# Editor
+.vscode/
+.idea/
+
+# GitHub metadata
+.github/
+
+.gitignore
+
