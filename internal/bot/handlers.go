@@ -21,7 +21,7 @@ func (b *Bot) onInteractionCreate(session *discordgo.Session, interaction *disco
 	ctx := context.Background()
 	data := interaction.ApplicationCommandData()
 	switch data.Name {
-	case "status", "mode", "preset", "lockdown", "rules", "domain", "report", "language", "test", "logs", "risk":
+	case "status", "mode", "preset", "lockdown", "rules", "domain", "report", "language", "test", "logs", "risk", "whitelist", "nuke":
 		b.handleSecurityCommand(ctx, session, interaction, data.Name, data.Options)
 	case "verify":
 		b.verify.HandleVerify(ctx)
@@ -138,12 +138,10 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 		}
 		value := options[0].StringValue()
 		if value == "on" {
-			b.playbook.TriggerLockdown(ctx, interaction.GuildID)
-			settings.LockdownEnabled = true
+			b.enterLockdown(ctx, interaction.GuildID, "manual")
 		} else {
-			settings.LockdownEnabled = false
+			b.restoreLockdown(ctx, interaction.GuildID, "manual")
 		}
-		_ = b.store.UpsertGuildSettings(ctx, settings)
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_lockdown"), Value: value, Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_lockdown_title"), b.t(lang, "security_lockdown_updated"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 	case "rules":
@@ -192,8 +190,178 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(value, "security_language_title"), b.t(value, "security_language_updated"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 	case "test":
 		b.handleTestCommand(ctx, session, interaction, settings, options)
+	case "whitelist":
+		b.handleWhitelistCommand(ctx, session, interaction, settings, options)
+	case "nuke":
+		b.handleNukeCommand(ctx, session, interaction, settings, options)
 	default:
 		b.respondEmbed(session, interaction, b.commandEmbed("Security", b.t(lang, "error_unknown"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+	}
+}
+
+func (b *Bot) handleWhitelistCommand(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, settings storage.GuildSettings, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	lang := settings.Language
+	if lang == "" {
+		lang = b.cfg.DefaultLanguage
+	}
+	if len(options) == 0 {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_whitelist_title"), b.t(lang, "error_no_subcommand"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+	action := options[0].StringValue()
+	if action != "add" && action != "remove" && action != "list" {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_whitelist_title"), b.t(lang, "error_unknown"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+	var userID string
+	var roleID string
+	for _, opt := range options[1:] {
+		switch opt.Name {
+		case "user":
+			if opt.Type == discordgo.ApplicationCommandOptionUser && opt.UserValue(session) != nil {
+				userID = opt.UserValue(session).ID
+			}
+		case "role":
+			if opt.Type == discordgo.ApplicationCommandOptionRole && opt.RoleValue(session, interaction.GuildID) != nil {
+				roleID = opt.RoleValue(session, interaction.GuildID).ID
+			}
+		}
+	}
+
+	if action == "list" {
+		users, _ := b.store.ListWhitelistUsers(ctx, interaction.GuildID)
+		roles, _ := b.store.ListWhitelistRoles(ctx, interaction.GuildID)
+		userLines := b.t(lang, "value_none")
+		roleLines := b.t(lang, "value_none")
+		if len(users) > 0 {
+			lines := make([]string, 0, len(users))
+			for _, id := range users {
+				lines = append(lines, "<@"+id+">")
+			}
+			userLines = strings.Join(lines, "\n")
+		}
+		if len(roles) > 0 {
+			lines := make([]string, 0, len(roles))
+			for _, id := range roles {
+				lines = append(lines, "<@&"+id+">")
+			}
+			roleLines = strings.Join(lines, "\n")
+		}
+		fields := []*discordgo.MessageEmbedField{
+			{Name: b.t(lang, "field_users"), Value: userLines, Inline: false},
+			{Name: b.t(lang, "field_roles"), Value: roleLines, Inline: false},
+		}
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_whitelist_title"), b.t(lang, "security_whitelist_list"), b.cfg.Notifications.EmbedColors.Action, fields), true)
+		return
+	}
+
+	if userID == "" && roleID == "" {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_whitelist_title"), b.t(lang, "error_whitelist_target"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	if userID != "" {
+		if action == "add" {
+			_ = b.store.AddWhitelistUser(ctx, interaction.GuildID, userID)
+		} else if action == "remove" {
+			_ = b.store.RemoveWhitelistUser(ctx, interaction.GuildID, userID)
+		}
+		fields := []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true}}
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_whitelist_title"), b.t(lang, "security_whitelist_updated"), b.cfg.Notifications.EmbedColors.Action, fields), true)
+		return
+	}
+
+	if roleID != "" {
+		if action == "add" {
+			_ = b.store.AddWhitelistRole(ctx, interaction.GuildID, roleID)
+		} else if action == "remove" {
+			_ = b.store.RemoveWhitelistRole(ctx, interaction.GuildID, roleID)
+		}
+		fields := []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_role"), Value: "<@&" + roleID + ">", Inline: true}}
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_whitelist_title"), b.t(lang, "security_whitelist_updated"), b.cfg.Notifications.EmbedColors.Action, fields), true)
+		return
+	}
+}
+
+func (b *Bot) handleNukeCommand(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, settings storage.GuildSettings, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	lang := settings.Language
+	if lang == "" {
+		lang = b.cfg.DefaultLanguage
+	}
+	if len(options) == 0 {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_nuke_title"), b.t(lang, "error_no_subcommand"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+	action := options[0].StringValue()
+	key := ""
+	value := 0
+	for _, opt := range options[1:] {
+		if opt.Name == "key" {
+			key = opt.StringValue()
+		}
+		if opt.Name == "value" {
+			value = int(opt.IntValue())
+		}
+	}
+
+	switch action {
+	case "status":
+		fields := []*discordgo.MessageEmbedField{
+			{Name: b.t(lang, "field_enabled"), Value: fmt.Sprintf("%t", settings.NukeEnabled), Inline: true},
+			{Name: b.t(lang, "field_window"), Value: fmt.Sprintf("%ds", settings.NukeWindowSeconds), Inline: true},
+			{Name: b.t(lang, "field_channel_delete"), Value: fmt.Sprintf("%d", settings.NukeChannelDelete), Inline: true},
+			{Name: b.t(lang, "field_channel_create"), Value: fmt.Sprintf("%d", settings.NukeChannelCreate), Inline: true},
+			{Name: b.t(lang, "field_channel_update"), Value: fmt.Sprintf("%d", settings.NukeChannelUpdate), Inline: true},
+			{Name: b.t(lang, "field_role_delete"), Value: fmt.Sprintf("%d", settings.NukeRoleDelete), Inline: true},
+			{Name: b.t(lang, "field_role_create"), Value: fmt.Sprintf("%d", settings.NukeRoleCreate), Inline: true},
+			{Name: b.t(lang, "field_role_update"), Value: fmt.Sprintf("%d", settings.NukeRoleUpdate), Inline: true},
+			{Name: b.t(lang, "field_webhook_update"), Value: fmt.Sprintf("%d", settings.NukeWebhookUpdate), Inline: true},
+			{Name: b.t(lang, "field_ban_add"), Value: fmt.Sprintf("%d", settings.NukeBanAdd), Inline: true},
+			{Name: b.t(lang, "field_guild_update"), Value: fmt.Sprintf("%d", settings.NukeGuildUpdate), Inline: true},
+		}
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_nuke_title"), b.t(lang, "security_nuke_status"), b.cfg.Notifications.EmbedColors.Action, fields), true)
+	case "enable":
+		settings.NukeEnabled = true
+		_ = b.store.UpsertGuildSettings(ctx, settings)
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_nuke_title"), b.t(lang, "security_nuke_updated"), b.cfg.Notifications.EmbedColors.Action, nil), true)
+	case "disable":
+		settings.NukeEnabled = false
+		_ = b.store.UpsertGuildSettings(ctx, settings)
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_nuke_title"), b.t(lang, "security_nuke_updated"), b.cfg.Notifications.EmbedColors.Action, nil), true)
+	case "set":
+		if key == "" {
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_nuke_title"), b.t(lang, "error_nuke_action"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+		switch key {
+		case "window_seconds":
+			settings.NukeWindowSeconds = value
+		case "channel_delete":
+			settings.NukeChannelDelete = value
+		case "channel_create":
+			settings.NukeChannelCreate = value
+		case "channel_update":
+			settings.NukeChannelUpdate = value
+		case "role_delete":
+			settings.NukeRoleDelete = value
+		case "role_create":
+			settings.NukeRoleCreate = value
+		case "role_update":
+			settings.NukeRoleUpdate = value
+		case "webhook_update":
+			settings.NukeWebhookUpdate = value
+		case "ban_add":
+			settings.NukeBanAdd = value
+		case "guild_update":
+			settings.NukeGuildUpdate = value
+		default:
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_nuke_title"), b.t(lang, "error_nuke_action"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+		_ = b.store.UpsertGuildSettings(ctx, settings)
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_nuke_title"), b.t(lang, "security_nuke_updated"), b.cfg.Notifications.EmbedColors.Action, nil), true)
+	default:
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_nuke_title"), b.t(lang, "error_nuke_action"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 	}
 }
 
@@ -213,7 +381,7 @@ func (b *Bot) handleTestCommand(ctx context.Context, session *discordgo.Session,
 
 	switch scenario {
 	case "raid":
-		triggered := b.playbook.TriggerLockdown(ctx, interaction.GuildID)
+		triggered := b.enterLockdown(ctx, interaction.GuildID, "test")
 		if triggered {
 			b.audit.Log(ctx, audit.LevelWarn, interaction.GuildID, userID, "test", "raid lockdown simulated")
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_test_title"), b.t(settings.Language, "security_test_raid"), b.cfg.Notifications.EmbedColors.Action, nil), true)

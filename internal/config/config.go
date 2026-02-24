@@ -24,6 +24,7 @@ type Config struct {
 	Risk                      RiskConfig     `yaml:"risk"`
 	Trust                     TrustConfig    `yaml:"trust"`
 	Thresholds                Thresholds     `yaml:"thresholds"`
+	Nuke                      NukeConfig     `yaml:"nuke"`
 	Actions                   ActionConfig   `yaml:"actions"`
 	Notifications             NotifyConfig   `yaml:"notifications"`
 	Playbook                  PlaybookConfig `yaml:"playbook"`
@@ -55,10 +56,28 @@ type Thresholds struct {
 	BurstWindowSeconds int `yaml:"burst_window_seconds"`
 }
 
+type NukeConfig struct {
+	Enabled             bool `yaml:"enabled"`
+	WindowSeconds       int  `yaml:"window_seconds"`
+	ChannelDelete       int  `yaml:"channel_delete"`
+	ChannelCreate       int  `yaml:"channel_create"`
+	ChannelUpdate       int  `yaml:"channel_update"`
+	RoleDelete          int  `yaml:"role_delete"`
+	RoleCreate          int  `yaml:"role_create"`
+	RoleUpdate          int  `yaml:"role_update"`
+	WebhookUpdate       int  `yaml:"webhook_update"`
+	BanAdd              int  `yaml:"ban_add"`
+	GuildUpdate         int  `yaml:"guild_update"`
+	ExemptThreshold     int  `yaml:"exempt_threshold"`
+	ExemptWindowSeconds int  `yaml:"exempt_window_seconds"`
+}
+
 type PlaybookConfig struct {
-	LockdownMinutes   int `yaml:"lockdown_minutes"`
-	StrictModeMinutes int `yaml:"strict_mode_minutes"`
-	ExitStepSeconds   int `yaml:"exit_step_seconds"`
+	LockdownMinutes   int  `yaml:"lockdown_minutes"`
+	StrictModeMinutes int  `yaml:"strict_mode_minutes"`
+	ExitStepSeconds   int  `yaml:"exit_step_seconds"`
+	LockdownSlowmode  int  `yaml:"lockdown_slowmode_seconds"`
+	LockdownDenySend  bool `yaml:"lockdown_deny_send"`
 }
 
 type ActionConfig struct {
@@ -106,6 +125,21 @@ func DefaultConfig() Config {
 			BurstLinks:         3,
 			BurstWindowSeconds: 20,
 		},
+		Nuke: NukeConfig{
+			Enabled:             true,
+			WindowSeconds:       20,
+			ChannelDelete:       3,
+			ChannelCreate:       6,
+			ChannelUpdate:       6,
+			RoleDelete:          3,
+			RoleCreate:          6,
+			RoleUpdate:          6,
+			WebhookUpdate:       4,
+			BanAdd:              3,
+			GuildUpdate:         2,
+			ExemptThreshold:     20,
+			ExemptWindowSeconds: 10,
+		},
 		Actions: ActionConfig{
 			Enabled:          false,
 			Delete:           20,
@@ -126,7 +160,7 @@ func DefaultConfig() Config {
 				Error:   0xF97316,
 			},
 		},
-		Playbook: PlaybookConfig{LockdownMinutes: 15, StrictModeMinutes: 10, ExitStepSeconds: 20},
+		Playbook: PlaybookConfig{LockdownMinutes: 15, StrictModeMinutes: 10, ExitStepSeconds: 20, LockdownSlowmode: 10, LockdownDenySend: true},
 	}
 }
 
@@ -171,6 +205,21 @@ func applyEnv(cfg *Config) {
 	cfg.Thresholds.RaidJoins = envInt("RAID_JOINS", cfg.Thresholds.RaidJoins)
 	cfg.Thresholds.RaidWindowSeconds = envInt("RAID_WINDOW_SECONDS", cfg.Thresholds.RaidWindowSeconds)
 	cfg.Thresholds.PhishingRisk = envInt("PHISHING_RISK", cfg.Thresholds.PhishingRisk)
+	cfg.Thresholds.BurstLinks = envInt("BURST_LINKS", cfg.Thresholds.BurstLinks)
+	cfg.Thresholds.BurstWindowSeconds = envInt("BURST_WINDOW_SECONDS", cfg.Thresholds.BurstWindowSeconds)
+	cfg.Nuke.Enabled = envBool("NUKE_ENABLED", cfg.Nuke.Enabled)
+	cfg.Nuke.WindowSeconds = envInt("NUKE_WINDOW_SECONDS", cfg.Nuke.WindowSeconds)
+	cfg.Nuke.ChannelDelete = envInt("NUKE_CHANNEL_DELETE", cfg.Nuke.ChannelDelete)
+	cfg.Nuke.ChannelCreate = envInt("NUKE_CHANNEL_CREATE", cfg.Nuke.ChannelCreate)
+	cfg.Nuke.ChannelUpdate = envInt("NUKE_CHANNEL_UPDATE", cfg.Nuke.ChannelUpdate)
+	cfg.Nuke.RoleDelete = envInt("NUKE_ROLE_DELETE", cfg.Nuke.RoleDelete)
+	cfg.Nuke.RoleCreate = envInt("NUKE_ROLE_CREATE", cfg.Nuke.RoleCreate)
+	cfg.Nuke.RoleUpdate = envInt("NUKE_ROLE_UPDATE", cfg.Nuke.RoleUpdate)
+	cfg.Nuke.WebhookUpdate = envInt("NUKE_WEBHOOK_UPDATE", cfg.Nuke.WebhookUpdate)
+	cfg.Nuke.BanAdd = envInt("NUKE_BAN_ADD", cfg.Nuke.BanAdd)
+	cfg.Nuke.GuildUpdate = envInt("NUKE_GUILD_UPDATE", cfg.Nuke.GuildUpdate)
+	cfg.Nuke.ExemptThreshold = envInt("NUKE_EXEMPT_THRESHOLD", cfg.Nuke.ExemptThreshold)
+	cfg.Nuke.ExemptWindowSeconds = envInt("NUKE_EXEMPT_WINDOW_SECONDS", cfg.Nuke.ExemptWindowSeconds)
 	cfg.Actions.Enabled = envBool("ACTIONS_ENABLED", cfg.Actions.Enabled)
 	cfg.Actions.TimeoutMinutes = envInt("ACTIONS_TIMEOUT_MINUTES", cfg.Actions.TimeoutMinutes)
 	cfg.Actions.QuarantineRoleID = envString("QUARANTINE_ROLE_ID", cfg.Actions.QuarantineRoleID)
@@ -181,6 +230,8 @@ func applyEnv(cfg *Config) {
 	cfg.Notifications.EmbedColors.Action = envInt("EMBED_COLOR_ACTION", cfg.Notifications.EmbedColors.Action)
 	cfg.Notifications.EmbedColors.Warning = envInt("EMBED_COLOR_WARNING", cfg.Notifications.EmbedColors.Warning)
 	cfg.Notifications.EmbedColors.Error = envInt("EMBED_COLOR_ERROR", cfg.Notifications.EmbedColors.Error)
+	cfg.Playbook.LockdownSlowmode = envInt("LOCKDOWN_SLOWMODE_SECONDS", cfg.Playbook.LockdownSlowmode)
+	cfg.Playbook.LockdownDenySend = envBool("LOCKDOWN_DENY_SEND", cfg.Playbook.LockdownDenySend)
 }
 
 func BuildLogger(level string) (*zap.Logger, error) {

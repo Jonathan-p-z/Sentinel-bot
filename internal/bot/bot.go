@@ -10,6 +10,7 @@ import (
 
 	"sentinel-adaptive/internal/analytics"
 	"sentinel-adaptive/internal/config"
+	"sentinel-adaptive/internal/modules/antinuke"
 	"sentinel-adaptive/internal/modules/antiphishing"
 	"sentinel-adaptive/internal/modules/antiraid"
 	"sentinel-adaptive/internal/modules/antispam"
@@ -26,26 +27,30 @@ import (
 )
 
 type Bot struct {
-	cfg         config.Config
-	logger      *zap.Logger
-	store       *storage.Store
-	risk        *risk.Engine
-	trust       *trust.Engine
-	playbook    *playbook.Engine
-	audit       *audit.Logger
-	analytics   *analytics.Service
-	session     *discordgo.Session
-	antispam    *antispam.Module
-	antiraid    *antiraid.Module
-	antiphish   *antiphishing.Module
-	behavior    *behavior.Module
-	verify      *verification.Module
-	auditAgg    map[string]*auditAggregate
-	auditAggMu  sync.Mutex
-	warnAgg     map[string]*warningAggregate
-	warnAggMu   sync.Mutex
-	detectAgg   map[string]*detectionAggregate
-	detectAggMu sync.Mutex
+	cfg            config.Config
+	logger         *zap.Logger
+	store          *storage.Store
+	risk           *risk.Engine
+	trust          *trust.Engine
+	playbook       *playbook.Engine
+	audit          *audit.Logger
+	analytics      *analytics.Service
+	session        *discordgo.Session
+	antispam       *antispam.Module
+	antiraid       *antiraid.Module
+	antiphish      *antiphishing.Module
+	antinuke       *antinuke.Module
+	antinukeExempt *antinuke.Module
+	behavior       *behavior.Module
+	verify         *verification.Module
+	auditAgg       map[string]*auditAggregate
+	auditAggMu     sync.Mutex
+	warnAgg        map[string]*warningAggregate
+	warnAggMu      sync.Mutex
+	detectAgg      map[string]*detectionAggregate
+	detectAggMu    sync.Mutex
+	lockdownMu     sync.Mutex
+	lockdownMap    map[string]*lockdownSnapshot
 }
 
 type auditAggregate struct {
@@ -70,6 +75,17 @@ type detectionAggregate struct {
 	lastInfo  string
 }
 
+type lockdownSnapshot struct {
+	channels map[string]channelSnapshot
+}
+
+type channelSnapshot struct {
+	slowmode int
+	allow    int64
+	deny     int64
+	hasPerm  bool
+}
+
 func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine *risk.Engine, trustEngine *trust.Engine, playbookEngine *playbook.Engine, auditLogger *audit.Logger, analyticsEngine *analytics.Service) (*Bot, error) {
 	session, err := discordgo.New("Bot " + cfg.DiscordToken)
 	if err != nil {
@@ -79,27 +95,31 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 	session.Identify.Intents = discordgo.IntentsGuilds |
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentsGuildMembers |
+		discordgo.IntentsGuildBans |
 		discordgo.IntentsMessageContent |
 		discordgo.IntentsGuildVoiceStates
 
 	b := &Bot{
-		cfg:       cfg,
-		logger:    logger,
-		store:     store,
-		risk:      riskEngine,
-		trust:     trustEngine,
-		playbook:  playbookEngine,
-		audit:     auditLogger,
-		analytics: analyticsEngine,
-		session:   session,
-		auditAgg:  make(map[string]*auditAggregate),
-		warnAgg:   make(map[string]*warningAggregate),
-		detectAgg: make(map[string]*detectionAggregate),
+		cfg:         cfg,
+		logger:      logger,
+		store:       store,
+		risk:        riskEngine,
+		trust:       trustEngine,
+		playbook:    playbookEngine,
+		audit:       auditLogger,
+		analytics:   analyticsEngine,
+		session:     session,
+		auditAgg:    make(map[string]*auditAggregate),
+		warnAgg:     make(map[string]*warningAggregate),
+		detectAgg:   make(map[string]*detectionAggregate),
+		lockdownMap: make(map[string]*lockdownSnapshot),
 	}
 
 	b.antispam = antispam.New(cfg.Thresholds, riskEngine, auditLogger)
 	b.antiraid = antiraid.New(cfg.Thresholds, playbookEngine, auditLogger)
 	b.antiphish = antiphishing.New(riskEngine, auditLogger)
+	b.antinuke = antinuke.New(time.Duration(cfg.Nuke.WindowSeconds) * time.Second)
+	b.antinukeExempt = antinuke.New(time.Duration(cfg.Nuke.ExemptWindowSeconds) * time.Second)
 	b.behavior = behavior.New()
 	b.verify = verification.New()
 	if b.audit != nil {
@@ -118,6 +138,15 @@ func (b *Bot) Start() error {
 	b.session.AddHandler(b.onReady)
 	b.session.AddHandler(b.onMessageCreate)
 	b.session.AddHandler(b.onGuildMemberAdd)
+	b.session.AddHandler(b.onChannelCreate)
+	b.session.AddHandler(b.onChannelDelete)
+	b.session.AddHandler(b.onChannelUpdate)
+	b.session.AddHandler(b.onRoleCreate)
+	b.session.AddHandler(b.onRoleDelete)
+	b.session.AddHandler(b.onRoleUpdate)
+	b.session.AddHandler(b.onWebhooksUpdate)
+	b.session.AddHandler(b.onGuildBanAdd)
+	b.session.AddHandler(b.onGuildUpdate)
 	b.session.AddHandler(b.onInteractionCreate)
 
 	if err := b.session.Open(); err != nil {
@@ -182,7 +211,392 @@ func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.Guil
 	}
 	ctx := context.Background()
 	_ = session
-	b.antiraid.HandleJoin(ctx, session, event)
+	if b.antiraid.HandleJoin(ctx, session, event) {
+		b.enterLockdown(ctx, event.GuildID, "anti_raid")
+	}
+}
+
+func (b *Bot) onChannelCreate(session *discordgo.Session, event *discordgo.ChannelCreate) {
+	if event.Channel == nil || event.Channel.GuildID == "" {
+		return
+	}
+	ctx := context.Background()
+	actorID := b.resolveAuditActor(event.Channel.GuildID, discordgo.AuditLogActionChannelCreate, event.Channel.ID)
+	b.handleNukeAction(ctx, event.Channel.GuildID, actorID, "channel_create", event.Channel.ID)
+}
+
+func (b *Bot) onChannelDelete(session *discordgo.Session, event *discordgo.ChannelDelete) {
+	if event.Channel == nil || event.Channel.GuildID == "" {
+		return
+	}
+	ctx := context.Background()
+	actorID := b.resolveAuditActor(event.Channel.GuildID, discordgo.AuditLogActionChannelDelete, event.Channel.ID)
+	b.handleNukeAction(ctx, event.Channel.GuildID, actorID, "channel_delete", event.Channel.ID)
+}
+
+func (b *Bot) onChannelUpdate(session *discordgo.Session, event *discordgo.ChannelUpdate) {
+	if event.Channel == nil || event.Channel.GuildID == "" {
+		return
+	}
+	ctx := context.Background()
+	actorID := b.resolveAuditActor(event.Channel.GuildID, discordgo.AuditLogActionChannelUpdate, event.Channel.ID)
+	b.handleNukeAction(ctx, event.Channel.GuildID, actorID, "channel_update", event.Channel.ID)
+}
+
+func (b *Bot) onRoleCreate(session *discordgo.Session, event *discordgo.GuildRoleCreate) {
+	if event.GuildID == "" || event.Role == nil {
+		return
+	}
+	ctx := context.Background()
+	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionRoleCreate, event.Role.ID)
+	b.handleNukeAction(ctx, event.GuildID, actorID, "role_create", event.Role.ID)
+}
+
+func (b *Bot) onRoleDelete(session *discordgo.Session, event *discordgo.GuildRoleDelete) {
+	if event.GuildID == "" || event.RoleID == "" {
+		return
+	}
+	ctx := context.Background()
+	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionRoleDelete, event.RoleID)
+	b.handleNukeAction(ctx, event.GuildID, actorID, "role_delete", event.RoleID)
+}
+
+func (b *Bot) onRoleUpdate(session *discordgo.Session, event *discordgo.GuildRoleUpdate) {
+	if event.GuildID == "" || event.Role == nil {
+		return
+	}
+	ctx := context.Background()
+	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionRoleUpdate, event.Role.ID)
+	b.handleNukeAction(ctx, event.GuildID, actorID, "role_update", event.Role.ID)
+}
+
+func (b *Bot) onWebhooksUpdate(session *discordgo.Session, event *discordgo.WebhooksUpdate) {
+	if event.GuildID == "" {
+		return
+	}
+	ctx := context.Background()
+	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionWebhookUpdate, event.ChannelID)
+	b.handleNukeAction(ctx, event.GuildID, actorID, "webhook_update", event.ChannelID)
+}
+
+func (b *Bot) onGuildBanAdd(session *discordgo.Session, event *discordgo.GuildBanAdd) {
+	if event.GuildID == "" || event.User == nil {
+		return
+	}
+	ctx := context.Background()
+	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionMemberBanAdd, event.User.ID)
+	b.handleNukeAction(ctx, event.GuildID, actorID, "ban_add", event.User.ID)
+}
+
+func (b *Bot) onGuildUpdate(session *discordgo.Session, event *discordgo.GuildUpdate) {
+	if event.Guild == nil || event.Guild.ID == "" {
+		return
+	}
+	ctx := context.Background()
+	actorID := b.resolveAuditActor(event.Guild.ID, discordgo.AuditLogActionGuildUpdate, event.Guild.ID)
+	b.handleNukeAction(ctx, event.Guild.ID, actorID, "guild_update", event.Guild.ID)
+}
+
+func (b *Bot) handleNukeAction(ctx context.Context, guildID, actorID, action, targetID string) {
+	settings := b.guildSettings(ctx, guildID)
+	if !settings.NukeEnabled {
+		return
+	}
+	threshold := b.nukeThreshold(settings, action)
+	if threshold <= 0 {
+		return
+	}
+	if actorID == "" {
+		return
+	}
+	if b.isWhitelisted(ctx, guildID, actorID) {
+		exemptThreshold := b.cfg.Nuke.ExemptThreshold
+		if exemptThreshold <= 0 {
+			return
+		}
+		exemptWindow := time.Duration(b.cfg.Nuke.ExemptWindowSeconds) * time.Second
+		if exemptWindow <= 0 {
+			exemptWindow = 10 * time.Second
+		}
+		b.antinukeExempt.SetWindow(exemptWindow)
+		count := b.antinukeExempt.Count(guildID, actorID, action)
+		if count != exemptThreshold {
+			return
+		}
+		detail := fmt.Sprintf("action=%s count=%d threshold=%d target=%s exempt=true", action, count, exemptThreshold, targetID)
+		b.audit.Log(ctx, audit.LevelCrit, guildID, actorID, "anti_nuke", detail)
+		b.enterLockdown(ctx, guildID, "anti_nuke_exempt")
+		return
+	}
+	window := time.Duration(settings.NukeWindowSeconds) * time.Second
+	if window <= 0 {
+		window = 20 * time.Second
+	}
+	b.antinuke.SetWindow(window)
+	count := b.antinuke.Count(guildID, actorID, action)
+	if count != threshold {
+		return
+	}
+
+	detail := fmt.Sprintf("action=%s count=%d threshold=%d target=%s", action, count, threshold, targetID)
+	b.audit.Log(ctx, audit.LevelCrit, guildID, actorID, "anti_nuke", detail)
+	b.enterLockdown(ctx, guildID, "anti_nuke")
+	b.applyNukeSanction(ctx, guildID, actorID)
+}
+
+func (b *Bot) nukeThreshold(settings storage.GuildSettings, action string) int {
+	switch action {
+	case "channel_delete":
+		return settings.NukeChannelDelete
+	case "channel_create":
+		return settings.NukeChannelCreate
+	case "channel_update":
+		return settings.NukeChannelUpdate
+	case "role_delete":
+		return settings.NukeRoleDelete
+	case "role_create":
+		return settings.NukeRoleCreate
+	case "role_update":
+		return settings.NukeRoleUpdate
+	case "webhook_update":
+		return settings.NukeWebhookUpdate
+	case "ban_add":
+		return settings.NukeBanAdd
+	case "guild_update":
+		return settings.NukeGuildUpdate
+	default:
+		return 0
+	}
+}
+
+func (b *Bot) resolveAuditActor(guildID string, actionType discordgo.AuditLogAction, targetID string) string {
+	logs, err := b.session.GuildAuditLog(guildID, "", "", int(actionType), 5)
+	if err != nil || logs == nil {
+		return ""
+	}
+	for _, entry := range logs.AuditLogEntries {
+		if entry == nil {
+			continue
+		}
+		if targetID != "" && entry.TargetID != targetID {
+			continue
+		}
+		ts, err := discordgo.SnowflakeTimestamp(entry.ID)
+		if err == nil && time.Since(ts) > 30*time.Second {
+			continue
+		}
+		return entry.UserID
+	}
+	return ""
+}
+
+func (b *Bot) applyNukeSanction(ctx context.Context, guildID, userID string) {
+	if userID == "" {
+		return
+	}
+	if !b.cfg.Actions.Enabled {
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "enforcement_disabled", "nuke sanction blocked")
+		return
+	}
+	minutes := b.cfg.Actions.TimeoutMinutes
+	if minutes <= 0 {
+		minutes = 10
+	}
+	until := time.Now().Add(time.Duration(minutes) * time.Minute)
+	if err := b.session.GuildMemberTimeout(guildID, userID, &until); err != nil {
+		b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", "nuke timeout failed")
+		return
+	}
+	b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "nuke_timeout", fmt.Sprintf("minutes=%d", minutes))
+}
+
+func (b *Bot) enterLockdown(ctx context.Context, guildID, reason string) bool {
+	if b.playbook == nil {
+		return false
+	}
+	if !b.playbook.TriggerLockdown(ctx, guildID) {
+		return false
+	}
+	applied := b.applyLockdown(ctx, guildID)
+	if !applied {
+		return true
+	}
+
+	lockdownMinutes := b.cfg.Playbook.LockdownMinutes
+	if lockdownMinutes <= 0 {
+		lockdownMinutes = 10
+	}
+	go func() {
+		time.Sleep(time.Duration(lockdownMinutes) * time.Minute)
+		b.restoreLockdown(context.Background(), guildID, reason)
+	}()
+	return true
+}
+
+func (b *Bot) applyLockdown(ctx context.Context, guildID string) bool {
+	settings := b.guildSettings(ctx, guildID)
+	b.lockdownMu.Lock()
+	if _, exists := b.lockdownMap[guildID]; exists {
+		b.lockdownMu.Unlock()
+		return false
+	}
+	b.lockdownMu.Unlock()
+	channels, err := b.session.GuildChannels(guildID)
+	if err != nil {
+		return false
+	}
+
+	snapshot := &lockdownSnapshot{channels: make(map[string]channelSnapshot)}
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		if channel.Type != discordgo.ChannelTypeGuildText && channel.Type != discordgo.ChannelTypeGuildNews {
+			continue
+		}
+		snap := channelSnapshot{slowmode: channel.RateLimitPerUser}
+		for _, overwrite := range channel.PermissionOverwrites {
+			if overwrite.Type == discordgo.PermissionOverwriteTypeRole && overwrite.ID == guildID {
+				snap.allow = overwrite.Allow
+				snap.deny = overwrite.Deny
+				snap.hasPerm = true
+				break
+			}
+		}
+		snapshot.channels[channel.ID] = snap
+
+		if b.cfg.Playbook.LockdownDenySend {
+			allow := snap.allow
+			deny := snap.deny | discordgo.PermissionSendMessages
+			_ = b.session.ChannelPermissionSet(channel.ID, guildID, discordgo.PermissionOverwriteTypeRole, allow, deny)
+		}
+		if b.cfg.Playbook.LockdownSlowmode > 0 && channel.RateLimitPerUser != b.cfg.Playbook.LockdownSlowmode {
+			slowmode := b.cfg.Playbook.LockdownSlowmode
+			_, _ = b.session.ChannelEditComplex(channel.ID, &discordgo.ChannelEdit{RateLimitPerUser: &slowmode})
+		}
+	}
+
+	b.lockdownMu.Lock()
+	b.lockdownMap[guildID] = snapshot
+	b.lockdownMu.Unlock()
+
+	settings.LockdownEnabled = true
+	_ = b.store.UpsertGuildSettings(ctx, settings)
+	return true
+}
+
+func (b *Bot) restoreLockdown(ctx context.Context, guildID, reason string) {
+	b.lockdownMu.Lock()
+	snapshot := b.lockdownMap[guildID]
+	if snapshot != nil {
+		delete(b.lockdownMap, guildID)
+	}
+	b.lockdownMu.Unlock()
+	if snapshot == nil {
+		settings := b.guildSettings(ctx, guildID)
+		if settings.LockdownEnabled {
+			settings.LockdownEnabled = false
+			_ = b.store.UpsertGuildSettings(ctx, settings)
+		}
+		_ = reason
+		return
+	}
+
+	for channelID, snap := range snapshot.channels {
+		if snap.hasPerm {
+			_ = b.session.ChannelPermissionSet(channelID, guildID, discordgo.PermissionOverwriteTypeRole, snap.allow, snap.deny)
+		} else {
+			_ = b.session.ChannelPermissionDelete(channelID, guildID)
+		}
+		slowmode := snap.slowmode
+		_, _ = b.session.ChannelEditComplex(channelID, &discordgo.ChannelEdit{RateLimitPerUser: &slowmode})
+	}
+
+	settings := b.guildSettings(ctx, guildID)
+	if settings.LockdownEnabled {
+		settings.LockdownEnabled = false
+		_ = b.store.UpsertGuildSettings(ctx, settings)
+	}
+	_ = reason
+}
+
+func (b *Bot) isWhitelisted(ctx context.Context, guildID, userID string) bool {
+	if userID == "" {
+		return false
+	}
+	if b.session == nil {
+		return false
+	}
+	guild, err := b.session.State.Guild(guildID)
+	if err != nil || guild == nil {
+		guild, _ = b.session.Guild(guildID)
+	}
+	if guild != nil && guild.OwnerID == userID {
+		return true
+	}
+
+	member := b.memberForUser(guildID, userID)
+	if member != nil && guild != nil && b.memberHasAdmin(guild, member) {
+		return true
+	}
+
+	users, err := b.store.ListWhitelistUsers(ctx, guildID)
+	if err == nil {
+		for _, id := range users {
+			if id == userID {
+				return true
+			}
+		}
+	}
+	if member == nil {
+		return false
+	}
+	roles, err := b.store.ListWhitelistRoles(ctx, guildID)
+	if err != nil {
+		return false
+	}
+	roleSet := make(map[string]struct{}, len(roles))
+	for _, id := range roles {
+		roleSet[id] = struct{}{}
+	}
+	for _, roleID := range member.Roles {
+		if _, ok := roleSet[roleID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) memberForUser(guildID, userID string) *discordgo.Member {
+	member, err := b.session.State.Member(guildID, userID)
+	if err == nil && member != nil {
+		return member
+	}
+	member, _ = b.session.GuildMember(guildID, userID)
+	return member
+}
+
+func (b *Bot) memberHasAdmin(guild *discordgo.Guild, member *discordgo.Member) bool {
+	if guild == nil || member == nil {
+		return false
+	}
+	perms := int64(0)
+	for _, role := range guild.Roles {
+		if role.ID == guild.ID {
+			perms |= role.Permissions
+			break
+		}
+	}
+	roleMap := make(map[string]*discordgo.Role, len(guild.Roles))
+	for _, role := range guild.Roles {
+		roleMap[role.ID] = role
+	}
+	for _, roleID := range member.Roles {
+		if role := roleMap[roleID]; role != nil {
+			perms |= role.Permissions
+		}
+	}
+	return perms&discordgo.PermissionAdministrator != 0
 }
 
 func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, score float64, auditOnly bool) {
@@ -618,6 +1032,10 @@ func (b *Bot) auditEventLabel(lang, event string) string {
 		return b.t(lang, "event_test")
 	case "security":
 		return b.t(lang, "event_security")
+	case "anti_nuke":
+		return b.t(lang, "event_anti_nuke")
+	case "nuke_timeout":
+		return b.t(lang, "event_nuke_timeout")
 	default:
 		return event
 	}
@@ -903,6 +1321,17 @@ func (b *Bot) guildSettings(ctx context.Context, guildID string) storage.GuildSe
 		RaidWindowSeconds:  b.cfg.Thresholds.RaidWindowSeconds,
 		PhishingRisk:       b.cfg.Thresholds.PhishingRisk,
 		LockdownEnabled:    false,
+		NukeEnabled:        b.cfg.Nuke.Enabled,
+		NukeWindowSeconds:  b.cfg.Nuke.WindowSeconds,
+		NukeChannelDelete:  b.cfg.Nuke.ChannelDelete,
+		NukeChannelCreate:  b.cfg.Nuke.ChannelCreate,
+		NukeChannelUpdate:  b.cfg.Nuke.ChannelUpdate,
+		NukeRoleDelete:     b.cfg.Nuke.RoleDelete,
+		NukeRoleCreate:     b.cfg.Nuke.RoleCreate,
+		NukeRoleUpdate:     b.cfg.Nuke.RoleUpdate,
+		NukeWebhookUpdate:  b.cfg.Nuke.WebhookUpdate,
+		NukeBanAdd:         b.cfg.Nuke.BanAdd,
+		NukeGuildUpdate:    b.cfg.Nuke.GuildUpdate,
 	}
 
 	settings, err := b.store.GetGuildSettings(ctx, guildID, defaults)
