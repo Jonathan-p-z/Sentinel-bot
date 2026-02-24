@@ -377,6 +377,117 @@ func (b *Bot) registerCommands() error {
 			},
 		},
 		{
+			Name:        "whitelist",
+			Description: "Manage whitelist",
+			DescriptionLocalizations: &map[discordgo.Locale]string{
+				discordgo.French:    "Gerer la whitelist",
+				discordgo.EnglishUS: "Manage whitelist",
+				discordgo.SpanishES: "Administrar whitelist",
+			},
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "action",
+					Description: "add, remove, list",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "add, remove, list",
+						discordgo.EnglishUS: "add, remove, list",
+						discordgo.SpanishES: "add, remove, list",
+					},
+					Required: true,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "add", Value: "add"},
+						{Name: "remove", Value: "remove"},
+						{Name: "list", Value: "list"},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionUser,
+					Name:        "user",
+					Description: "target user",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "utilisateur cible",
+						discordgo.EnglishUS: "target user",
+						discordgo.SpanishES: "usuario objetivo",
+					},
+					Required: false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionRole,
+					Name:        "role",
+					Description: "target role",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "role cible",
+						discordgo.EnglishUS: "target role",
+						discordgo.SpanishES: "rol objetivo",
+					},
+					Required: false,
+				},
+			},
+		},
+		{
+			Name:        "nuke",
+			Description: "Anti-nuke settings",
+			DescriptionLocalizations: &map[discordgo.Locale]string{
+				discordgo.French:    "Parametres anti-nuke",
+				discordgo.EnglishUS: "Anti-nuke settings",
+				discordgo.SpanishES: "Ajustes anti-nuke",
+			},
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "action",
+					Description: "status, enable, disable, set",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "status, enable, disable, set",
+						discordgo.EnglishUS: "status, enable, disable, set",
+						discordgo.SpanishES: "status, enable, disable, set",
+					},
+					Required: true,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "status", Value: "status"},
+						{Name: "enable", Value: "enable"},
+						{Name: "disable", Value: "disable"},
+						{Name: "set", Value: "set"},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "key",
+					Description: "setting key",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "cle de parametre",
+						discordgo.EnglishUS: "setting key",
+						discordgo.SpanishES: "clave de ajuste",
+					},
+					Required: false,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "window_seconds", Value: "window_seconds"},
+						{Name: "channel_delete", Value: "channel_delete"},
+						{Name: "channel_create", Value: "channel_create"},
+						{Name: "channel_update", Value: "channel_update"},
+						{Name: "role_delete", Value: "role_delete"},
+						{Name: "role_create", Value: "role_create"},
+						{Name: "role_update", Value: "role_update"},
+						{Name: "webhook_update", Value: "webhook_update"},
+						{Name: "ban_add", Value: "ban_add"},
+						{Name: "guild_update", Value: "guild_update"},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "value",
+					Description: "threshold or seconds",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "seuil ou secondes",
+						discordgo.EnglishUS: "threshold or seconds",
+						discordgo.SpanishES: "umbral o segundos",
+					},
+					Required: false,
+				},
+			},
+		},
+		{
 			Name:        "verify",
 			Description: "Verification flow",
 			DescriptionLocalizations: &map[discordgo.Locale]string{
