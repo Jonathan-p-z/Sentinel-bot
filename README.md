@@ -104,7 +104,66 @@ Set HEALTH_ENABLED=true and HEALTH_ADDR=":8080" to expose /health.
 - /report day|week
 - /language (fr|en|es)
 - /risk reset [user]
+- /whitelist add|remove|list [user] [role]
+- /nuke status|enable|disable|set
 - /verify
+
+## Anti-Nuke and Whitelist
+Anti-nuke detects rapid destructive actions from a single actor and responds automatically.
+- It uses audit logs to identify who performed the action.
+- It counts actions per actor inside `window_seconds` and triggers when the threshold is reached.
+- When triggered, it logs `anti_nuke`, enters lockdown, and timeouts the actor (if enforcement is enabled).
+- Whitelisted/exempt actors can still trigger lockdown if they exceed the extreme threshold, but no sanction is applied.
+- Configure the exempt extreme rule with `nuke.exempt_threshold` and `nuke.exempt_window_seconds`.
+
+Whitelist exclusions:
+- Server owner and admins are always excluded.
+- You can add trusted users or roles with `/whitelist`.
+
+Keys for `/nuke set`:
+- window_seconds
+- channel_delete, channel_create, channel_update
+- role_delete, role_create, role_update
+- webhook_update
+- ban_add
+- guild_update
+
+## Recommended Stable Defaults
+These defaults aim for a stable and autonomous configuration on small/medium servers.
+
+```yaml
+nuke:
+	enabled: true
+	window_seconds: 20
+	channel_delete: 3
+	channel_create: 5
+	channel_update: 8
+	role_delete: 2
+	role_create: 4
+	role_update: 6
+	webhook_update: 3
+	ban_add: 3
+	guild_update: 2
+	exempt_threshold: 20
+	exempt_window_seconds: 10
+
+playbook:
+	lockdown_slowmode_seconds: 10
+	lockdown_deny_send: true
+
+thresholds:
+	spam_messages: 6
+	spam_window_seconds: 8
+	raid_joins: 6
+	raid_window_seconds: 10
+	phishing_risk: 30
+	burst_links: 3
+	burst_window_seconds: 60
+
+actions:
+	enabled: true
+	timeout_minutes: 10
+```
 
 ## Notes on Actions
 Delete, quarantine, timeout, and ban thresholds are configurable. Enforcement is gated by `ACTIONS_ENABLED`. When enabled, Sentinel can apply timeouts and bans, and add a quarantine role if `QUARANTINE_ROLE_ID` is set. Delete still requires message context and remains logged by default.
