@@ -160,7 +160,7 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 			nuke_enabled, nuke_window_seconds, nuke_channel_delete, nuke_channel_create,
 			nuke_channel_update, nuke_role_delete, nuke_role_create, nuke_role_update,
 			nuke_webhook_update, nuke_ban_add, nuke_guild_update
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(guild_id) DO UPDATE SET
 			security_log_channel = excluded.security_log_channel,
 			language = excluded.language,

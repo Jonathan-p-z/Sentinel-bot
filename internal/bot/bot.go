@@ -10,6 +10,7 @@ import (
 
 	"sentinel-adaptive/internal/analytics"
 	"sentinel-adaptive/internal/config"
+	"sentinel-adaptive/internal/modules/antihate"
 	"sentinel-adaptive/internal/modules/antinuke"
 	"sentinel-adaptive/internal/modules/antiphishing"
 	"sentinel-adaptive/internal/modules/antiraid"
@@ -37,6 +38,7 @@ type Bot struct {
 	analytics      *analytics.Service
 	session        *discordgo.Session
 	antispam       *antispam.Module
+	antihate       *antihate.Module
 	antiraid       *antiraid.Module
 	antiphish      *antiphishing.Module
 	antinuke       *antinuke.Module
@@ -116,6 +118,7 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 	}
 
 	b.antispam = antispam.New(cfg.Thresholds, riskEngine, auditLogger)
+	b.antihate = antihate.New(riskEngine, auditLogger)
 	b.antiraid = antiraid.New(cfg.Thresholds, playbookEngine, auditLogger)
 	b.antiphish = antiphishing.New(riskEngine, auditLogger)
 	b.antinuke = antinuke.New(time.Duration(cfg.Nuke.WindowSeconds) * time.Second)
@@ -196,6 +199,11 @@ func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.Message
 		return
 	}
 
+	if score, flagged, _ := b.antihate.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly); flagged {
+		b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly)
+		return
+	}
+
 	if !b.isSpamBypassChannel(session, msg.ChannelID) {
 		if score, flagged := b.antispam.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly); flagged {
 			b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly)
@@ -214,7 +222,7 @@ func (b *Bot) isSpamBypassChannel(session *discordgo.Session, channelID string) 
 
 	if session != nil && session.State != nil {
 		if channel, err := session.State.Channel(channelID); err == nil && channel != nil {
-			return strings.EqualFold(channel.Name, "spam")
+			return strings.EqualFold(channel.Name, "𝐒𝐏𝐀𝐌🗯️")
 		}
 	}
 
@@ -225,7 +233,7 @@ func (b *Bot) isSpamBypassChannel(session *discordgo.Session, channelID string) 
 	if err != nil || channel == nil {
 		return false
 	}
-	return strings.EqualFold(channel.Name, "spam")
+	return strings.EqualFold(channel.Name, "𝐒𝐏𝐀𝐌🗯️")
 }
 
 func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.GuildMemberAdd) {
@@ -1035,6 +1043,8 @@ func (b *Bot) auditEventLabel(lang, event string) string {
 		return b.t(lang, "event_anti_phishing")
 	case "anti_spam":
 		return b.t(lang, "event_anti_spam")
+	case "anti_hate":
+		return b.t(lang, "event_anti_hate")
 	case "anti_raid":
 		return b.t(lang, "event_anti_raid")
 	case "risk_action":
@@ -1077,6 +1087,8 @@ func (b *Bot) formatAuditDetails(lang string, entry storage.AuditLog) string {
 		}
 	case "anti_spam":
 		return b.t(lang, "label_cause") + ": " + b.t(lang, "cause_spam_burst")
+	case "anti_hate":
+		return b.t(lang, "label_cause") + ": " + b.t(lang, "cause_hate_speech")
 	case "anti_raid":
 		return b.t(lang, "label_cause") + ": " + b.t(lang, "cause_raid_burst")
 	case "enforcement_disabled":
