@@ -1,3 +1,5 @@
 .env
+/.github/
+/.github/**
 data/sentinel.db
 *.db
