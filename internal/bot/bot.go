@@ -196,13 +196,36 @@ func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.Message
 		return
 	}
 
-	if score, flagged := b.antispam.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly); flagged {
-		b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly)
-		return
+	if !b.isSpamBypassChannel(session, msg.ChannelID) {
+		if score, flagged := b.antispam.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly); flagged {
+			b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly)
+			return
+		}
 	}
 
 	b.behavior.HandleMessage(ctx)
 	b.trust.Increase(msg.GuildID, msg.Author.ID, 0.5)
+}
+
+func (b *Bot) isSpamBypassChannel(session *discordgo.Session, channelID string) bool {
+	if channelID == "" {
+		return false
+	}
+
+	if session != nil && session.State != nil {
+		if channel, err := session.State.Channel(channelID); err == nil && channel != nil {
+			return strings.EqualFold(channel.Name, "spam")
+		}
+	}
+
+	if session == nil {
+		return false
+	}
+	channel, err := session.Channel(channelID)
+	if err != nil || channel == nil {
+		return false
+	}
+	return strings.EqualFold(channel.Name, "spam")
 }
 
 func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.GuildMemberAdd) {
