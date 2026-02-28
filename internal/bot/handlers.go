@@ -66,13 +66,26 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "security_logs_current"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 			return
 		}
-		channel := options[0].ChannelValue(session)
+		channel, err := b.resolveLogChannelOption(session, interaction.GuildID, options[0])
+		if err != nil {
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "error_logs_channel_unreachable"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
 		if channel == nil {
-			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "error_logs_channel_invalid"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+		if !isLogChannelType(channel.Type) {
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "error_logs_type"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+		if err := b.ensureBotCanWriteChannel(session, channel.ID); err != nil {
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "error_logs_permissions"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 			return
 		}
 		settings.SecurityLogChannel = channel.ID
 		if err := b.store.UpsertGuildSettings(ctx, settings); err != nil {
+			b.logger.Warn("logs channel update failed", zap.String("guild_id", interaction.GuildID), zap.String("channel_id", channel.ID), zap.Error(err))
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_logs_title"), b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 			return
 		}
@@ -552,6 +565,69 @@ func (b *Bot) commandEmbed(title, description string, color int, fields []*disco
 		Color:       color,
 		Timestamp:   time.Now().Format(time.RFC3339),
 		Fields:      fields,
+	}
+}
+
+func (b *Bot) resolveLogChannelOption(session *discordgo.Session, guildID string, option *discordgo.ApplicationCommandInteractionDataOption) (*discordgo.Channel, error) {
+	if option == nil {
+		return nil, fmt.Errorf("missing option")
+	}
+	if channel := option.ChannelValue(session); channel != nil {
+		return channel, nil
+	}
+
+	channelID, ok := option.Value.(string)
+	if !ok || channelID == "" {
+		return nil, fmt.Errorf("missing channel id")
+	}
+
+	if session != nil && session.State != nil {
+		if channel, err := session.State.Channel(channelID); err == nil && channel != nil {
+			return channel, nil
+		}
+	}
+
+	if session == nil {
+		return nil, fmt.Errorf("missing session")
+	}
+	channel, err := session.Channel(channelID)
+	if err != nil {
+		return nil, err
+	}
+	if channel == nil {
+		return nil, fmt.Errorf("channel not found")
+	}
+	if guildID != "" && channel.GuildID != "" && channel.GuildID != guildID {
+		return nil, fmt.Errorf("channel is not in guild")
+	}
+	return channel, nil
+}
+
+func (b *Bot) ensureBotCanWriteChannel(session *discordgo.Session, channelID string) error {
+	if session == nil || session.State == nil || session.State.User == nil {
+		return fmt.Errorf("bot user unavailable")
+	}
+	permissions, err := session.UserChannelPermissions(session.State.User.ID, channelID)
+	if err != nil {
+		return err
+	}
+	required := int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessages)
+	if permissions&required != required {
+		return fmt.Errorf("missing permissions")
+	}
+	return nil
+}
+
+func isLogChannelType(channelType discordgo.ChannelType) bool {
+	switch channelType {
+	case discordgo.ChannelTypeGuildText,
+		discordgo.ChannelTypeGuildNews,
+		discordgo.ChannelTypeGuildPublicThread,
+		discordgo.ChannelTypeGuildPrivateThread,
+		discordgo.ChannelTypeGuildNewsThread:
+		return true
+	default:
+		return false
 	}
 }
 
