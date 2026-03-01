@@ -1,5 +1,17 @@
+# 1. Mots de passe et configurations privées
 .env
-/.github/
-/.github/**
-data/sentinel.db
+config.yaml
+
+# 2. Exécutables Golang (Les binaires compilés)
+/sentinel
+/sentinel-bot
+# 3. Bases de données locales
+data/
 *.db
+
+# 4. Archives, téléchargements et caches locaux
+go1.22.0.linux-amd64.tar.gz
+CACHED
+
+# 5. Fichiers de logs (au cas où ton bot en génère)
+*.log
