@@ -66,6 +66,18 @@ func New(connStr string) (*Store, error) {
 		return nil, fmt.Errorf("impossible de joindre postgres: %w", err)
 	}
 
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS banned_users (
+			guild_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			created_at BIGINT NOT NULL,
+			PRIMARY KEY (guild_id, user_id)
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("impossible de créer banned_users: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -98,9 +110,9 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 	err := row.Scan(
 		&result.SecurityLogChannel, &result.Language, &result.Mode, &result.RulePreset, &result.RetentionDays,
 		&result.SpamMessages, &result.SpamWindowSeconds, &result.RaidJoins, &result.RaidWindowSeconds,
-		&result.PhishingRisk, &result.LockdownEnabled, &result.NukeEnabled, &result.NukeWindowSeconds, 
-		&result.NukeChannelDelete, &result.NukeChannelCreate, &result.NukeChannelUpdate, &result.NukeRoleDelete, 
-		&result.NukeRoleCreate, &result.NukeRoleUpdate, &result.NukeWebhookUpdate, &result.NukeBanAdd, 
+		&result.PhishingRisk, &result.LockdownEnabled, &result.NukeEnabled, &result.NukeWindowSeconds,
+		&result.NukeChannelDelete, &result.NukeChannelCreate, &result.NukeChannelUpdate, &result.NukeRoleDelete,
+		&result.NukeRoleCreate, &result.NukeRoleUpdate, &result.NukeWebhookUpdate, &result.NukeBanAdd,
 		&result.NukeGuildUpdate,
 	)
 
@@ -175,7 +187,9 @@ func (s *Store) ListAuditLogs(ctx context.Context, guildID string, since time.Ti
 		WHERE guild_id = $1 AND created_at >= $2
 		ORDER BY created_at DESC
 	`, guildID, since.Unix())
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 
 	var logs []AuditLog
@@ -205,12 +219,16 @@ func (s *Store) RemoveWhitelistUser(ctx context.Context, guildID, userID string)
 
 func (s *Store) ListWhitelistUsers(ctx context.Context, guildID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT user_id FROM whitelist_users WHERE guild_id = $1`, guildID)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var users []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil { return nil, err }
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
 		users = append(users, id)
 	}
 	return users, nil
@@ -230,12 +248,16 @@ func (s *Store) RemoveWhitelistRole(ctx context.Context, guildID, roleID string)
 
 func (s *Store) ListWhitelistRoles(ctx context.Context, guildID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT role_id FROM whitelist_roles WHERE guild_id = $1`, guildID)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var roles []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil { return nil, err }
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
 		roles = append(roles, id)
 	}
 	return roles, nil
@@ -255,12 +277,16 @@ func (s *Store) RemoveDomainAllow(ctx context.Context, guildID, domain string) e
 
 func (s *Store) ListDomainAllow(ctx context.Context, guildID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT domain FROM domain_allowlist WHERE guild_id = $1`, guildID)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var domains []string
 	for rows.Next() {
 		var d string
-		if err := rows.Scan(&d); err != nil { return nil, err }
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
 		domains = append(domains, d)
 	}
 	return domains, nil
@@ -278,13 +304,49 @@ func (s *Store) RemoveDomainBlock(ctx context.Context, guildID, domain string) e
 
 func (s *Store) ListDomainBlock(ctx context.Context, guildID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT domain FROM domain_blocklist WHERE guild_id = $1`, guildID)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var domains []string
 	for rows.Next() {
 		var d string
-		if err := rows.Scan(&d); err != nil { return nil, err }
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
 		domains = append(domains, d)
 	}
 	return domains, nil
+}
+
+func (s *Store) AddBannedUser(ctx context.Context, guildID, userID, reason string) error {
+	if guildID == "" || userID == "" {
+		return nil
+	}
+	if reason == "" {
+		reason = "unspecified"
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO banned_users (guild_id, user_id, reason, created_at)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (guild_id, user_id) DO UPDATE SET
+			reason = EXCLUDED.reason,
+			created_at = EXCLUDED.created_at
+	`, guildID, userID, reason, time.Now().Unix())
+	return err
+}
+
+func (s *Store) IsBannedUser(ctx context.Context, guildID, userID string) (bool, error) {
+	if guildID == "" || userID == "" {
+		return false, nil
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT 1 FROM banned_users WHERE guild_id = $1 AND user_id = $2 LIMIT 1`, guildID, userID)
+	var found int
+	if err := row.Scan(&found); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return found == 1, nil
 }

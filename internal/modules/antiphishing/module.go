@@ -12,6 +12,14 @@ import (
 )
 
 var keywordSignals = []string{"nitro", "free", "claim", "gift", "steam", "giveaway"}
+var trustedGIFDomains = map[string]struct{}{
+	"tenor.com":       {},
+	"www.tenor.com":   {},
+	"media.tenor.com": {},
+	"c.tenor.com":     {},
+}
+
+var urlThreatSignals = []string{"kys", "kill", "suicide", "violer", "rape", "egorge", "snuff", "gore"}
 
 type Module struct {
 	risk  *risk.Engine
@@ -40,6 +48,15 @@ func (m *Module) HandleMessage(ctx context.Context, session *discordgo.Session, 
 		if allowed {
 			continue
 		}
+		if isTrustedGIFDomain(domain) {
+			if blocked || hasURLThreatIndicators(normalized) {
+				suspicious = true
+				detail = "suspicious tenor gif link: " + normalized
+				m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_phishing", detail)
+				break
+			}
+			continue
+		}
 		if blocked || hasKeywords(msg.Content) {
 			suspicious = true
 			detail = "suspicious link: " + normalized
@@ -63,6 +80,24 @@ func hasKeywords(content string) bool {
 	lower := strings.ToLower(content)
 	for _, keyword := range keywordSignals {
 		if strings.Contains(lower, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTrustedGIFDomain(domain string) bool {
+	domain = strings.ToLower(domain)
+	if _, ok := trustedGIFDomains[domain]; ok {
+		return true
+	}
+	return strings.HasSuffix(domain, ".tenor.com")
+}
+
+func hasURLThreatIndicators(url string) bool {
+	lower := strings.ToLower(url)
+	for _, indicator := range urlThreatSignals {
+		if strings.Contains(lower, indicator) {
 			return true
 		}
 	}

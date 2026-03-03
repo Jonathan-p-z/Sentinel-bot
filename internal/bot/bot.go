@@ -183,6 +183,9 @@ func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.Message
 	if msg.GuildID == "" {
 		return
 	}
+	if b.userIsAboveBot(msg.GuildID, msg.Author.ID) {
+		return
+	}
 
 	ctx := context.Background()
 	settings := b.guildSettings(ctx, msg.GuildID)
@@ -241,9 +244,22 @@ func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.Guil
 		return
 	}
 	ctx := context.Background()
+	if event.Member != nil && event.Member.User != nil {
+		userID := event.Member.User.ID
+		if b.store != nil {
+			if banned, err := b.store.IsBannedUser(ctx, event.GuildID, userID); err == nil && banned {
+				_ = b.session.GuildBanCreateWithReason(event.GuildID, userID, "Sentinel Adaptive persistent ban", 0)
+				b.audit.Log(ctx, audit.LevelWarn, event.GuildID, userID, "persistent_ban_reapply", "rejoin blocked")
+				return
+			}
+		}
+	}
 	_ = session
 	if b.antiraid.HandleJoin(ctx, session, event) {
 		b.enterLockdown(ctx, event.GuildID, "anti_raid")
+		if event.Member != nil && event.Member.User != nil {
+			b.banAndStore(ctx, event.GuildID, event.Member.User.ID, "raid_detected")
+		}
 	}
 }
 
@@ -315,6 +331,9 @@ func (b *Bot) onGuildBanAdd(session *discordgo.Session, event *discordgo.GuildBa
 		return
 	}
 	ctx := context.Background()
+	if b.store != nil {
+		_ = b.store.AddBannedUser(ctx, event.GuildID, event.User.ID, "discord_ban_event")
+	}
 	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionMemberBanAdd, event.User.ID)
 	b.handleNukeAction(ctx, event.GuildID, actorID, "ban_add", event.User.ID)
 }
@@ -338,6 +357,10 @@ func (b *Bot) handleNukeAction(ctx context.Context, guildID, actorID, action, ta
 		return
 	}
 	if actorID == "" {
+		return
+	}
+	if b.userIsAboveBot(guildID, actorID) {
+		b.audit.Log(ctx, audit.LevelInfo, guildID, actorID, "nuke_ignored", "actor above bot hierarchy")
 		return
 	}
 	if b.isWhitelisted(ctx, guildID, actorID) {
@@ -429,16 +452,21 @@ func (b *Bot) applyNukeSanction(ctx context.Context, guildID, userID string) {
 		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "enforcement_disabled", "nuke sanction blocked")
 		return
 	}
-	minutes := b.cfg.Actions.TimeoutMinutes
-	if minutes <= 0 {
-		minutes = 10
-	}
-	until := time.Now().Add(time.Duration(minutes) * time.Minute)
-	if err := b.session.GuildMemberTimeout(guildID, userID, &until); err != nil {
-		b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", "nuke timeout failed")
+	b.banAndStore(ctx, guildID, userID, "anti_nuke_instant_ban")
+}
+
+func (b *Bot) banAndStore(ctx context.Context, guildID, userID, reason string) {
+	if guildID == "" || userID == "" {
 		return
 	}
-	b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "nuke_timeout", fmt.Sprintf("minutes=%d", minutes))
+	if err := b.session.GuildBanCreateWithReason(guildID, userID, "Sentinel Adaptive enforcement", 0); err != nil {
+		b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", "instant ban failed")
+		return
+	}
+	if b.store != nil {
+		_ = b.store.AddBannedUser(ctx, guildID, userID, reason)
+	}
+	b.audit.Log(ctx, audit.LevelCrit, guildID, userID, "instant_ban", reason)
 }
 
 func (b *Bot) enterLockdown(ctx context.Context, guildID, reason string) bool {
@@ -630,7 +658,64 @@ func (b *Bot) memberHasAdmin(guild *discordgo.Guild, member *discordgo.Member) b
 	return perms&discordgo.PermissionAdministrator != 0
 }
 
+func (b *Bot) userIsAboveBot(guildID, userID string) bool {
+	if guildID == "" || userID == "" || b.session == nil {
+		return false
+	}
+
+	guild, err := b.session.State.Guild(guildID)
+	if err != nil || guild == nil {
+		guild, _ = b.session.Guild(guildID)
+	}
+	if guild == nil {
+		return false
+	}
+	if guild.OwnerID == userID {
+		return true
+	}
+
+	botUserID := ""
+	if b.session.State != nil && b.session.State.User != nil {
+		botUserID = b.session.State.User.ID
+	}
+	if botUserID == "" {
+		return false
+	}
+
+	targetMember := b.memberForUser(guildID, userID)
+	botMember := b.memberForUser(guildID, botUserID)
+	if targetMember == nil || botMember == nil {
+		return false
+	}
+
+	targetPos := highestRolePosition(guild, targetMember)
+	botPos := highestRolePosition(guild, botMember)
+	return targetPos >= botPos
+}
+
+func highestRolePosition(guild *discordgo.Guild, member *discordgo.Member) int {
+	if guild == nil || member == nil {
+		return -1
+	}
+	roleMap := make(map[string]*discordgo.Role, len(guild.Roles))
+	for _, role := range guild.Roles {
+		roleMap[role.ID] = role
+	}
+	highest := -1
+	for _, roleID := range member.Roles {
+		if role := roleMap[roleID]; role != nil && role.Position > highest {
+			highest = role.Position
+		}
+	}
+	return highest
+}
+
 func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, score float64, auditOnly bool) {
+	if b.userIsAboveBot(guildID, userID) {
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "risk_ignored", "target above bot hierarchy")
+		return
+	}
+
 	settings := b.guildSettings(ctx, guildID)
 	lang := settings.Language
 	if lang == "" {
@@ -1369,7 +1454,7 @@ func (b *Bot) guildSettings(ctx context.Context, guildID string) storage.GuildSe
 		NukeGuildUpdate:    b.cfg.Nuke.GuildUpdate,
 	}
 
-	// ✅ Suppression de l'ouverture d'une nouvelle connexion DB ici. 
+	// ✅ Suppression de l'ouverture d'une nouvelle connexion DB ici.
 	// On utilise directement le store déjà connecté à Postgres.
 	settings, err := b.store.GetGuildSettings(ctx, guildID, defaults)
 	if err != nil {

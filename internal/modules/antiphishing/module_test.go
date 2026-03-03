@@ -27,3 +27,33 @@ func TestPhishingDetection(t *testing.T) {
 		t.Fatalf("expected phishing flag")
 	}
 }
+
+func TestTenorGIFAllowed(t *testing.T) {
+	store, _ := storage.New(":memory:")
+	_ = store.Migrate()
+	auditLogger := audit.NewLogger(store, zap.NewNop())
+	riskEngine := risk.NewEngine(config.RiskConfig{DecayPerMinute: 0, TTLMinutes: 60, TrustWeight: 0.5})
+	module := New(riskEngine, auditLogger)
+
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{ID: "2", ChannelID: "c1", GuildID: "g1", Author: &discordgo.User{ID: "u1"}, Content: "fun gif https://media.tenor.com/view/cat-funny-gif-12345"}}
+	allow := map[string]struct{}{}
+	block := map[string]struct{}{}
+	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true); flagged {
+		t.Fatalf("did not expect tenor gif to be flagged")
+	}
+}
+
+func TestTenorThreatURLFlagged(t *testing.T) {
+	store, _ := storage.New(":memory:")
+	_ = store.Migrate()
+	auditLogger := audit.NewLogger(store, zap.NewNop())
+	riskEngine := risk.NewEngine(config.RiskConfig{DecayPerMinute: 0, TTLMinutes: 60, TrustWeight: 0.5})
+	module := New(riskEngine, auditLogger)
+
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{ID: "3", ChannelID: "c1", GuildID: "g1", Author: &discordgo.User{ID: "u1"}, Content: "gif weird https://media.tenor.com/view/cat-kys-gif-12345"}}
+	allow := map[string]struct{}{}
+	block := map[string]struct{}{}
+	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true); !flagged {
+		t.Fatalf("expected tenor threat url to be flagged")
+	}
+}
