@@ -2,6 +2,7 @@ package antihate
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"sentinel-adaptive/internal/modules/audit"
@@ -25,12 +26,6 @@ var blockedKeywords = []string{
 	"sale juif",
 	"sale arabe",
 	"sale noir",
-	"pute",
-	"salope",
-	"connasse",
-	"michto",
-	"michtoneuse",
-	"michtonneuse",
 	"garce",
 	"trainee",
 	"catin",
@@ -44,7 +39,6 @@ var blockedKeywords = []string{
 	"feminazi",
 	"mal baisee",
 	"malbaisee",
-	"pede",
 	"pedale",
 	"tarlouze",
 	"tapette",
@@ -57,7 +51,6 @@ var blockedKeywords = []string{
 	"mongol",
 	"gogol",
 	"attarde",
-	"retard",
 	"retarded",
 	"triso",
 	"kys",
@@ -66,7 +59,6 @@ var blockedKeywords = []string{
 	"va te pendre",
 	"pends toi",
 	"egorge",
-	"creve",
 	"dechet humain",
 	"slp",
 	"bztmr",
@@ -76,15 +68,10 @@ var blockedKeywords = []string{
 	"ngrs",
 	"bgnl",
 	"bgnle",
-	"pd",
-	"p d",
 	"p0m",
 	"trlz",
 	"tpette",
 	"tarlz",
-	"slpe",
-	"conas",
-	"con asse",
 	"micht",
 	"mcht",
 	"fmnz",
@@ -94,9 +81,6 @@ var blockedKeywords = []string{
 	"smale",
 	"k y s",
 	"g die",
-	"p t e",
-	"p u t e",
-	"p*te",
 	"n a z i",
 	"n e g r e",
 	"s s",
@@ -152,11 +136,12 @@ func (m *Module) HandleMessage(ctx context.Context, session *discordgo.Session, 
 
 	content := normalizeText(msg.Content)
 
-	if !containsBlockedKeyword(content) {
+	matched, ok := findBlockedKeyword(content)
+	if !ok {
 		return 0, false, ""
 	}
 
-	detail := "hate speech keyword detected"
+	detail := fmt.Sprintf("user=<@%s> keyword=%q message=%q", msg.Author.ID, matched, msg.Content)
 	m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_hate", detail)
 	if !auditOnly {
 		_ = session.ChannelMessageDelete(msg.ChannelID, msg.ID)
@@ -166,13 +151,44 @@ func (m *Module) HandleMessage(ctx context.Context, session *discordgo.Session, 
 	return score, true, detail
 }
 
-func containsBlockedKeyword(content string) bool {
+func findBlockedKeyword(content string) (string, bool) {
+	tokens := strings.Fields(content)
 	for _, keyword := range blockedKeywords {
-		if strings.Contains(content, keyword) {
-			return true
+		normalizedKeyword := strings.TrimSpace(strings.ToLower(keyword))
+		if normalizedKeyword == "" {
+			continue
+		}
+		if strings.Contains(normalizedKeyword, " ") {
+			if containsPhraseWithBoundaries(content, normalizedKeyword) {
+				return keyword, true
+			}
+			continue
+		}
+		for _, token := range tokens {
+			if token == normalizedKeyword {
+				return keyword, true
+			}
 		}
 	}
-	return false
+	return "", false
+}
+
+func containsPhraseWithBoundaries(content, phrase string) bool {
+	start := 0
+	for {
+		idx := strings.Index(content[start:], phrase)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		end := idx + len(phrase)
+		leftOK := idx == 0 || content[idx-1] == ' '
+		rightOK := end == len(content) || content[end] == ' '
+		if leftOK && rightOK {
+			return true
+		}
+		start = idx + 1
+	}
 }
 
 func normalizeText(input string) string {
@@ -193,5 +209,6 @@ func normalizeText(input string) string {
 		"*", " ",
 		"@", "a",
 	)
-	return replacer.Replace(strings.ToLower(input))
+	normalized := replacer.Replace(strings.ToLower(input))
+	return strings.Join(strings.Fields(normalized), " ")
 }

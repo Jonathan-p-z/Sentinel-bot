@@ -22,11 +22,13 @@ func TestAntiSpamSlidingWindow(t *testing.T) {
 	module := New(config.Thresholds{SpamMessages: 2, SpamWindowSeconds: 2}, riskEngine, auditLogger)
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{ID: "1", ChannelID: "c1", GuildID: "g1", Author: &discordgo.User{ID: "u1"}}}
 
-	if _, flagged := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", true); flagged {
+	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", true); flagged {
 		t.Fatalf("unexpected flag")
 	}
 	msg.Message.ID = "2"
-	if _, flagged := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", true); !flagged {
+	if _, flagged, detail := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", true); !flagged {
 		t.Fatalf("expected flag")
+	} else if detail == "" {
+		t.Fatalf("expected sanction detail evidence")
 	}
 }

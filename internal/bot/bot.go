@@ -197,19 +197,19 @@ func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.Message
 		threshold := b.phishingThreshold()
 		if count >= threshold {
 			score := b.risk.AddRisk(msg.GuildID, msg.Author.ID, b.phishingBanDelta())
-			b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly)
+			b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly, detail)
 		}
 		return
 	}
 
-	if score, flagged, _ := b.antihate.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly); flagged {
-		b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly)
+	if score, flagged, detail := b.antihate.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly); flagged {
+		b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly, detail)
 		return
 	}
 
 	if !b.isSpamBypassChannel(session, msg.ChannelID) {
-		if score, flagged := b.antispam.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly); flagged {
-			b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly)
+		if score, flagged, detail := b.antispam.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly); flagged {
+			b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly, detail)
 			return
 		}
 	}
@@ -710,7 +710,7 @@ func highestRolePosition(guild *discordgo.Guild, member *discordgo.Member) int {
 	return highest
 }
 
-func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, score float64, auditOnly bool) {
+func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, score float64, auditOnly bool, triggerDetail string) {
 	if b.userIsAboveBot(guildID, userID) {
 		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "risk_ignored", "target above bot hierarchy")
 		return
@@ -747,6 +747,9 @@ func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, scor
 	}
 
 	reason := fmt.Sprintf("action=%s effective=%.1f risk=%.1f trust=%.1f mode=%s", action, effective, score, trustScore, settings.Mode)
+	if triggerDetail != "" {
+		reason += " trigger=" + triggerDetail
+	}
 	b.audit.Log(ctx, level, guildID, userID, "risk_action", reason)
 	b.sendSecurityEmbed(ctx, guildID, b.buildActionEmbed(lang, userID, action, score, trustScore, effective, auditOnly))
 	b.sendChannelWarning(ctx, guildID, userID, action, score, trustScore, effective, auditOnly)
@@ -1166,14 +1169,11 @@ func (b *Bot) formatAuditDetails(lang string, entry storage.AuditLog) string {
 
 	switch entry.Event {
 	case "anti_phishing":
-		if strings.HasPrefix(entry.Details, "suspicious link: ") {
-			url := strings.TrimPrefix(entry.Details, "suspicious link: ")
-			return b.t(lang, "label_url") + ": " + url
-		}
+		return b.clipAuditDetails(entry.Details)
 	case "anti_spam":
-		return b.t(lang, "label_cause") + ": " + b.t(lang, "cause_spam_burst")
+		return b.clipAuditDetails(entry.Details)
 	case "anti_hate":
-		return b.t(lang, "label_cause") + ": " + b.t(lang, "cause_hate_speech")
+		return b.clipAuditDetails(entry.Details)
 	case "anti_raid":
 		return b.t(lang, "label_cause") + ": " + b.t(lang, "cause_raid_burst")
 	case "enforcement_disabled":
@@ -1185,7 +1185,13 @@ func (b *Bot) formatAuditDetails(lang string, entry storage.AuditLog) string {
 	case "action_skipped":
 		return b.t(lang, "label_note") + ": " + entry.Details
 	case "risk_action":
-		parts := strings.Fields(entry.Details)
+		details := entry.Details
+		trigger := ""
+		if idx := strings.Index(details, " trigger="); idx >= 0 {
+			trigger = strings.TrimSpace(details[idx+len(" trigger="):])
+			details = details[:idx]
+		}
+		parts := strings.Fields(details)
 		data := make(map[string]string, len(parts))
 		for _, part := range parts {
 			kv := strings.SplitN(part, "=", 2)
@@ -1213,6 +1219,9 @@ func (b *Bot) formatAuditDetails(lang string, entry storage.AuditLog) string {
 		if value, ok := data["effective"]; ok {
 			lines = append(lines, b.t(lang, "field_effective")+": "+value)
 		}
+		if trigger != "" {
+			lines = append(lines, b.t(lang, "label_cause")+": "+b.clipAuditDetails(trigger))
+		}
 		if len(lines) == 0 {
 			return entry.Details
 		}
@@ -1220,6 +1229,15 @@ func (b *Bot) formatAuditDetails(lang string, entry storage.AuditLog) string {
 	}
 
 	return entry.Details
+}
+
+func (b *Bot) clipAuditDetails(details string) string {
+	const maxLen = 980
+	trimmed := strings.TrimSpace(details)
+	if len(trimmed) <= maxLen {
+		return trimmed
+	}
+	return trimmed[:maxLen] + "..."
 }
 
 func (b *Bot) notifyAudit(ctx context.Context, entry storage.AuditLog) {

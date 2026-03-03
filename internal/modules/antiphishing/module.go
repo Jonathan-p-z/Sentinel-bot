@@ -2,6 +2,7 @@ package antiphishing
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"sentinel-adaptive/internal/modules/audit"
@@ -51,7 +52,11 @@ func (m *Module) HandleMessage(ctx context.Context, session *discordgo.Session, 
 		if isTrustedGIFDomain(domain) {
 			if blocked || hasURLThreatIndicators(normalized) {
 				suspicious = true
-				detail = "suspicious tenor gif link: " + normalized
+				reason := "threat_indicators"
+				if blocked {
+					reason = "blocklist"
+				}
+				detail = fmt.Sprintf("user=<@%s> reason=%s url=%s message=%q", msg.Author.ID, reason, normalized, msg.Content)
 				m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_phishing", detail)
 				break
 			}
@@ -59,7 +64,11 @@ func (m *Module) HandleMessage(ctx context.Context, session *discordgo.Session, 
 		}
 		if blocked || hasKeywords(msg.Content) {
 			suspicious = true
-			detail = "suspicious link: " + normalized
+			reason := "keywords"
+			if blocked {
+				reason = "blocklist"
+			}
+			detail = fmt.Sprintf("user=<@%s> reason=%s url=%s message=%q", msg.Author.ID, reason, normalized, msg.Content)
 			m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_phishing", detail)
 			break
 		}

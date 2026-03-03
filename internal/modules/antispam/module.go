@@ -2,6 +2,7 @@ package antispam
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -30,21 +31,22 @@ func New(cfg config.Thresholds, riskEngine *risk.Engine, auditLogger *audit.Logg
 	}
 }
 
-func (m *Module) HandleMessage(ctx context.Context, session *discordgo.Session, msg *discordgo.MessageCreate, guildID string, auditOnly bool) (float64, bool) {
+func (m *Module) HandleMessage(ctx context.Context, session *discordgo.Session, msg *discordgo.MessageCreate, guildID string, auditOnly bool) (float64, bool, string) {
 	key := guildID + ":" + msg.Author.ID
 	window := m.getWindow(key)
 	count := window.Add(time.Now())
 	if count < m.config.SpamMessages {
-		return 0, false
+		return 0, false, ""
 	}
 
 	score := m.risk.AddRisk(guildID, msg.Author.ID, 12)
-	m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_spam", "message burst detected")
+	detail := fmt.Sprintf("user=<@%s> count=%d threshold=%d message=%q", msg.Author.ID, count, m.config.SpamMessages, msg.Content)
+	m.audit.Log(ctx, audit.LevelWarn, guildID, msg.Author.ID, "anti_spam", detail)
 
 	if !auditOnly {
 		_ = session.ChannelMessageDelete(msg.ChannelID, msg.ID)
 	}
-	return score, true
+	return score, true, detail
 }
 
 func (m *Module) getWindow(key string) *utils.SlidingWindow {
