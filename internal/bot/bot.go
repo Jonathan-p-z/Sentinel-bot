@@ -1369,9 +1369,11 @@ func (b *Bot) guildSettings(ctx context.Context, guildID string) storage.GuildSe
 		NukeGuildUpdate:    b.cfg.Nuke.GuildUpdate,
 	}
 
+	// ✅ Suppression de l'ouverture d'une nouvelle connexion DB ici. 
+	// On utilise directement le store déjà connecté à Postgres.
 	settings, err := b.store.GetGuildSettings(ctx, guildID, defaults)
 	if err != nil {
-		b.logger.Warn("guild settings fallback", zap.Error(err))
+		b.logger.Warn("guild settings fallback used", zap.Error(err))
 		return defaults
 	}
 	return settings

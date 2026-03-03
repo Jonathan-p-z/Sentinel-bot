@@ -13,7 +13,7 @@ import (
 
 type Config struct {
 	DiscordToken              string         `yaml:"discord_token"`
-	DatabasePath              string         `yaml:"database_path"`
+	DatabaseURL               string         `yaml:"database_url"` 
 	LogLevel                  string         `yaml:"log_level"`
 	DefaultSecurityLogChannel string         `yaml:"default_security_log_channel"`
 	DefaultLanguage           string         `yaml:"default_language"`
@@ -106,7 +106,7 @@ type EmbedColors struct {
 
 func DefaultConfig() Config {
 	return Config{
-		DatabasePath:              "/data/sentinel.db",
+		DatabaseURL:               "", 
 		LogLevel:                  "info",
 		RetentionDays:             14,
 		RulePreset:                "medium",
@@ -127,17 +127,17 @@ func DefaultConfig() Config {
 		},
 		Nuke: NukeConfig{
 			Enabled:             true,
-			WindowSeconds:       20,
-			ChannelDelete:       3,
-			ChannelCreate:       6,
-			ChannelUpdate:       6,
-			RoleDelete:          3,
-			RoleCreate:          6,
-			RoleUpdate:          6,
-			WebhookUpdate:       4,
-			BanAdd:              3,
-			GuildUpdate:         2,
-			ExemptThreshold:     20,
+			WindowSeconds:        20,
+			ChannelDelete:        3,
+			ChannelCreate:        6,
+			ChannelUpdate:        6,
+			RoleDelete:           3,
+			RoleCreate:           6,
+			RoleUpdate:           6,
+			WebhookUpdate:        4,
+			BanAdd:               3,
+			GuildUpdate:          2,
+			ExemptThreshold:      20,
 			ExemptWindowSeconds: 10,
 		},
 		Actions: ActionConfig{
@@ -181,6 +181,9 @@ func Load() (Config, error) {
 	if cfg.DiscordToken == "" {
 		return Config{}, errors.New("DISCORD_TOKEN is required")
 	}
+	if cfg.DatabaseURL == "" {
+		return Config{}, errors.New("DATABASE_URL is required")
+	}
 
 	cfg.Mode = normalizeMode(cfg.Mode)
 	cfg.RulePreset = normalizePreset(cfg.RulePreset)
@@ -191,7 +194,7 @@ func Load() (Config, error) {
 
 func applyEnv(cfg *Config) {
 	cfg.DiscordToken = envString("DISCORD_TOKEN", cfg.DiscordToken)
-	cfg.DatabasePath = envString("DATABASE_PATH", cfg.DatabasePath)
+	cfg.DatabaseURL = envString("DATABASE_URL", cfg.DatabaseURL)
 	cfg.LogLevel = envString("LOG_LEVEL", cfg.LogLevel)
 	cfg.DefaultSecurityLogChannel = envString("DEFAULT_SECURITY_LOG_CHANNEL", cfg.DefaultSecurityLogChannel)
 	cfg.DefaultLanguage = envString("DEFAULT_LANGUAGE", cfg.DefaultLanguage)

@@ -1,17 +1,57 @@
-# 1. Mots de passe et configurations privées
+# ==========================================
+# 1. SECRETS ET CONFIGURATIONS (CRITIQUE)
+# ==========================================
 .env
 config.yaml
+# On ignore aussi les copies de sauvegarde de nano ou des éditeurs
+*~
+*.bak
 
-# 2. Exécutables Golang (Les binaires compilés)
-/sentinel
-/sentinel-bot
-# 3. Bases de données locales
+# ==========================================
+# 2. BINAIRES ET EXÉCUTABLES
+# ==========================================
+sentinel
+sentinel-bot
+/out/
+# Ignore tous les fichiers à la racine qui n'ont pas d'extension (souvent des binaires)
+/[^.]*
+# Sauf le Dockerfile et les fichiers importants
+!Dockerfile
+!Makefile
+!docker-compose.yml
+
+# ==========================================
+# 3. BASES DE DONNÉES ET PERSISTANCE
+# ==========================================
 data/
 *.db
+*.sqlite
+postgres-data/
 
-# 4. Archives, téléchargements et caches locaux
-go1.22.0.linux-amd64.tar.gz
-CACHED
+# ==========================================
+# 4. DOCKER ET SYSTÈME
+# ==========================================
+.docker/
+# Si tu lances des builds en local
+.buildx/
 
-# 5. Fichiers de logs (au cas où ton bot en génère)
+# ==========================================
+# 5. DEPENDANCES ET CACHES
+# ==========================================
+*.tar.gz
+vendor/
+.cache/
+go.work
+
+# ==========================================
+# 6. LOGS ET DEBUG
+# ==========================================
 *.log
+logs/
+.DS_Store
+
+# ==========================================
+# 7. EXCLUSION DU GITIGNORE (Optionnel)
+# ==========================================
+# Si tu veux que ton .gitignore reste purement local à cette VM
+.gitignore

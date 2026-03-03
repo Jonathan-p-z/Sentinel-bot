@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq" // Driver PostgreSQL
+	_ "github.com/lib/pq" // Driver PostgreSQL obligatoire
 )
 
 //go:embed migrations/*.sql
@@ -19,31 +19,30 @@ type Store struct {
 	db *sql.DB
 }
 
-// ... Tes structures GuildSettings et AuditLog restent identiques ...
 type GuildSettings struct {
 	GuildID            string
 	SecurityLogChannel string
-	Language            string
-	Mode                string
-	RulePreset          string
-	RetentionDays       int
-	SpamMessages        int
-	SpamWindowSeconds   int
-	RaidJoins           int
-	RaidWindowSeconds   int
-	PhishingRisk        int
-	LockdownEnabled     bool
-	NukeEnabled         bool
-	NukeWindowSeconds   int
-	NukeChannelDelete   int
-	NukeChannelCreate   int
-	NukeChannelUpdate   int
-	NukeRoleDelete      int
-	NukeRoleCreate      int
-	NukeRoleUpdate      int
-	NukeWebhookUpdate   int
-	NukeBanAdd          int
-	NukeGuildUpdate     int
+	Language           string
+	Mode               string
+	RulePreset         string
+	RetentionDays      int
+	SpamMessages       int
+	SpamWindowSeconds  int
+	RaidJoins          int
+	RaidWindowSeconds  int
+	PhishingRisk       int
+	LockdownEnabled    bool
+	NukeEnabled        bool
+	NukeWindowSeconds  int
+	NukeChannelDelete  int
+	NukeChannelCreate  int
+	NukeChannelUpdate  int
+	NukeRoleDelete     int
+	NukeRoleCreate     int
+	NukeRoleUpdate     int
+	NukeWebhookUpdate  int
+	NukeBanAdd         int
+	NukeGuildUpdate    int
 }
 
 type AuditLog struct {
@@ -56,12 +55,17 @@ type AuditLog struct {
 	CreatedAt time.Time
 }
 
-// New prend maintenant l'URL de connexion Postgres
+// New initialise la connexion à PostgreSQL
 func New(connStr string) (*Store, error) {
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("erreur ouverture db: %w", err)
 	}
+
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("impossible de joindre postgres: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -71,11 +75,12 @@ func (s *Store) Close() {
 	}
 }
 
-// Migrate est simplifié car tu as déjà fait le SQL manuellement
 func (s *Store) Migrate() error {
-	fmt.Println("Migration skip: Tables already created in pgAdmin")
+	fmt.Println("Migration skip: Structure gérée par PostgreSQL")
 	return nil
 }
+
+// --- Guild Settings ---
 
 func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults GuildSettings) (GuildSettings, error) {
 	row := s.db.QueryRowContext(ctx, `
@@ -85,26 +90,26 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 		nuke_enabled, nuke_window_seconds, nuke_channel_delete, nuke_channel_create,
 		nuke_channel_update, nuke_role_delete, nuke_role_create, nuke_role_update,
 		nuke_webhook_update, nuke_ban_add, nuke_guild_update
-		FROM guild_settings WHERE guild_id = $1`, guildID) // $1 au lieu de ?
+		FROM guild_settings WHERE guild_id = $1`, guildID)
 
 	result := defaults
 	result.GuildID = guildID
 
-	var lockdown int
-	var nukeEnabled int
 	err := row.Scan(
 		&result.SecurityLogChannel, &result.Language, &result.Mode, &result.RulePreset, &result.RetentionDays,
 		&result.SpamMessages, &result.SpamWindowSeconds, &result.RaidJoins, &result.RaidWindowSeconds,
-		&result.PhishingRisk, &lockdown, &nukeEnabled, &result.NukeWindowSeconds, &result.NukeChannelDelete,
-		&result.NukeChannelCreate, &result.NukeChannelUpdate, &result.NukeRoleDelete, &result.NukeRoleCreate,
-		&result.NukeRoleUpdate, &result.NukeWebhookUpdate, &result.NukeBanAdd, &result.NukeGuildUpdate,
+		&result.PhishingRisk, &result.LockdownEnabled, &result.NukeEnabled, &result.NukeWindowSeconds, 
+		&result.NukeChannelDelete, &result.NukeChannelCreate, &result.NukeChannelUpdate, &result.NukeRoleDelete, 
+		&result.NukeRoleCreate, &result.NukeRoleUpdate, &result.NukeWebhookUpdate, &result.NukeBanAdd, 
+		&result.NukeGuildUpdate,
 	)
+
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) { return result, nil }
+		if errors.Is(err, sql.ErrNoRows) {
+			return result, nil
+		}
 		return GuildSettings{}, err
 	}
-	result.LockdownEnabled = lockdown == 1
-	result.NukeEnabled = nukeEnabled == 1
 	return result, nil
 }
 
@@ -144,14 +149,16 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 	`,
 		settings.GuildID, settings.SecurityLogChannel, settings.Language, settings.Mode, settings.RulePreset,
 		settings.RetentionDays, settings.SpamMessages, settings.SpamWindowSeconds, settings.RaidJoins,
-		settings.RaidWindowSeconds, settings.PhishingRisk, boolToInt(settings.LockdownEnabled),
-		boolToInt(settings.NukeEnabled), settings.NukeWindowSeconds, settings.NukeChannelDelete,
+		settings.RaidWindowSeconds, settings.PhishingRisk, settings.LockdownEnabled,
+		settings.NukeEnabled, settings.NukeWindowSeconds, settings.NukeChannelDelete,
 		settings.NukeChannelCreate, settings.NukeChannelUpdate, settings.NukeRoleDelete,
 		settings.NukeRoleCreate, settings.NukeRoleUpdate, settings.NukeWebhookUpdate,
 		settings.NukeBanAdd, settings.NukeGuildUpdate,
 	)
 	return err
 }
+
+// --- Audit Logs ---
 
 func (s *Store) AddAuditLog(ctx context.Context, log AuditLog) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -184,35 +191,7 @@ func (s *Store) ListAuditLogs(ctx context.Context, guildID string, since time.Ti
 	return logs, rows.Err()
 }
 
-func (s *Store) CleanupAuditLogs(ctx context.Context, retentionDays int) error {
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
-	_, err := s.db.ExecContext(ctx, `DELETE FROM audit_logs WHERE created_at < $1`, cutoff.Unix())
-	return err
-}
-
-func (s *Store) AddDomainAllow(ctx context.Context, guildID, domain string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO domain_allowlist (guild_id, domain) VALUES ($1, $2) ON CONFLICT DO NOTHING`, guildID, strings.ToLower(domain))
-	return err
-}
-
-func (s *Store) RemoveDomainAllow(ctx context.Context, guildID, domain string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM domain_allowlist WHERE guild_id = $1 AND domain = $2`, guildID, strings.ToLower(domain))
-	return err
-}
-
-func (s *Store) ListDomainAllow(ctx context.Context, guildID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT domain FROM domain_allowlist WHERE guild_id = $1 ORDER BY domain`, guildID)
-	if err != nil { return nil, err }
-	defer rows.Close()
-
-	var domains []string
-	for rows.Next() {
-		var domain string
-		if err := rows.Scan(&domain); err != nil { return nil, err }
-		domains = append(domains, domain)
-	}
-	return domains, rows.Err()
-}
+// --- Whitelist Users ---
 
 func (s *Store) AddWhitelistUser(ctx context.Context, guildID, userID string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO whitelist_users (guild_id, user_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, guildID, userID, time.Now().Unix())
@@ -225,18 +204,19 @@ func (s *Store) RemoveWhitelistUser(ctx context.Context, guildID, userID string)
 }
 
 func (s *Store) ListWhitelistUsers(ctx context.Context, guildID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT user_id FROM whitelist_users WHERE guild_id = $1 ORDER BY user_id`, guildID)
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id FROM whitelist_users WHERE guild_id = $1`, guildID)
 	if err != nil { return nil, err }
 	defer rows.Close()
-
 	var users []string
 	for rows.Next() {
-		var userID string
-		if err := rows.Scan(&userID); err != nil { return nil, err }
-		users = append(users, userID)
+		var id string
+		if err := rows.Scan(&id); err != nil { return nil, err }
+		users = append(users, id)
 	}
-	return users, rows.Err()
+	return users, nil
 }
+
+// --- Whitelist Roles ---
 
 func (s *Store) AddWhitelistRole(ctx context.Context, guildID, roleID string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO whitelist_roles (guild_id, role_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, guildID, roleID, time.Now().Unix())
@@ -249,17 +229,41 @@ func (s *Store) RemoveWhitelistRole(ctx context.Context, guildID, roleID string)
 }
 
 func (s *Store) ListWhitelistRoles(ctx context.Context, guildID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT role_id FROM whitelist_roles WHERE guild_id = $1 ORDER BY role_id`, guildID)
+	rows, err := s.db.QueryContext(ctx, `SELECT role_id FROM whitelist_roles WHERE guild_id = $1`, guildID)
 	if err != nil { return nil, err }
 	defer rows.Close()
-
 	var roles []string
 	for rows.Next() {
-		var roleID string
-		if err := rows.Scan(&roleID); err != nil { return nil, err }
-		roles = append(roles, roleID)
+		var id string
+		if err := rows.Scan(&id); err != nil { return nil, err }
+		roles = append(roles, id)
 	}
-	return roles, rows.Err()
+	return roles, nil
+}
+
+// --- Domain Lists ---
+
+func (s *Store) AddDomainAllow(ctx context.Context, guildID, domain string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO domain_allowlist (guild_id, domain) VALUES ($1, $2) ON CONFLICT DO NOTHING`, guildID, strings.ToLower(domain))
+	return err
+}
+
+func (s *Store) RemoveDomainAllow(ctx context.Context, guildID, domain string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM domain_allowlist WHERE guild_id = $1 AND domain = $2`, guildID, strings.ToLower(domain))
+	return err
+}
+
+func (s *Store) ListDomainAllow(ctx context.Context, guildID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT domain FROM domain_allowlist WHERE guild_id = $1`, guildID)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var domains []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil { return nil, err }
+		domains = append(domains, d)
+	}
+	return domains, nil
 }
 
 func (s *Store) AddDomainBlock(ctx context.Context, guildID, domain string) error {
@@ -273,26 +277,14 @@ func (s *Store) RemoveDomainBlock(ctx context.Context, guildID, domain string) e
 }
 
 func (s *Store) ListDomainBlock(ctx context.Context, guildID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT domain FROM domain_blocklist WHERE guild_id = $1 ORDER BY domain`, guildID)
+	rows, err := s.db.QueryContext(ctx, `SELECT domain FROM domain_blocklist WHERE guild_id = $1`, guildID)
 	if err != nil { return nil, err }
 	defer rows.Close()
-
 	var domains []string
 	for rows.Next() {
-		var domain string
-		if err := rows.Scan(&domain); err != nil { return nil, err }
-		domains = append(domains, domain)
+		var d string
+		if err := rows.Scan(&d); err != nil { return nil, err }
+		domains = append(domains, d)
 	}
-	return domains, rows.Err()
-}
-
-func boolToInt(value bool) int {
-	if value { return 1 }
-	return 0
-}
-
-func isIgnorableMigrationError(err error) bool {
-	if err == nil { return false }
-	message := err.Error()
-	return strings.Contains(message, "duplicate column name") || strings.Contains(message, "already exists")
+	return domains, nil
 }

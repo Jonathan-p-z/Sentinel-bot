@@ -34,7 +34,7 @@ func main() {
 		_ = logger.Sync()
 	}()
 
-	store, err := storage.New(cfg.DatabasePath)
+	store, err := storage.New(cfg.DatabaseURL)
 	if err != nil {
 		logger.Fatal("storage init failed", zap.Error(err))
 	}
