@@ -405,14 +405,14 @@ func (b *Bot) handleTestCommand(ctx context.Context, session *discordgo.Session,
 	case "spam":
 		score := b.risk.AddRisk(interaction.GuildID, userID, 12)
 		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "test", "spam signal simulated")
-		b.applyRiskActions(ctx, interaction.GuildID, userID, score, auditOnly)
+		b.applyRiskActions(ctx, interaction.GuildID, userID, score, auditOnly, "test scenario=spam")
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(settings.Language, "field_risk_score"), Value: fmt.Sprintf("%.1f", score), Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_test_title"), b.t(settings.Language, "security_test_spam"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 		return
 	case "phishing":
 		score := b.risk.AddRisk(interaction.GuildID, userID, float64(settings.PhishingRisk))
 		b.audit.Log(ctx, audit.LevelWarn, interaction.GuildID, userID, "test", "phishing signal simulated")
-		b.applyRiskActions(ctx, interaction.GuildID, userID, score, auditOnly)
+		b.applyRiskActions(ctx, interaction.GuildID, userID, score, auditOnly, "test scenario=phishing")
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(settings.Language, "field_risk_score"), Value: fmt.Sprintf("%.1f", score), Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_test_title"), b.t(settings.Language, "security_test_phishing"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 		return
@@ -423,7 +423,7 @@ func (b *Bot) handleTestCommand(ctx context.Context, session *discordgo.Session,
 		}
 		score := b.risk.AddRisk(interaction.GuildID, userID, float64(points))
 		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "test", "risk points added")
-		b.applyRiskActions(ctx, interaction.GuildID, userID, score, auditOnly)
+		b.applyRiskActions(ctx, interaction.GuildID, userID, score, auditOnly, "test scenario=risk")
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(settings.Language, "field_risk_score"), Value: fmt.Sprintf("%.1f", score), Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_test_title"), b.t(settings.Language, "security_test_risk"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 		return
