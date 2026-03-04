@@ -629,9 +629,6 @@ func (b *Bot) registerCommands() error {
 			continue
 		}
 		for _, cmd := range guildCmds {
-			if _, ok := desired[cmd.Name]; ok {
-				continue
-			}
 			_ = b.session.ApplicationCommandDelete(appID, guildID, cmd.ID)
 		}
 	}

@@ -224,16 +224,22 @@ func (b *Bot) handleFeedbackCommand(ctx context.Context, session *discordgo.Sess
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_user_ctx"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 		return
 	}
-	if len(options) == 0 {
-		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_no_subcommand"), b.cfg.Notifications.EmbedColors.Error, nil), true)
-		return
+
+	quickOpen := len(options) == 0
+	action := "open"
+	actionOptions := []*discordgo.ApplicationCommandInteractionDataOption{}
+	if !quickOpen {
+		action = options[0].Name
+		actionOptions = options[0].Options
+		if action != "open" && action != "close" {
+			action = options[0].StringValue()
+			actionOptions = options
+		}
 	}
 
-	action := options[0].Name
-	actionOptions := options[0].Options
-	if action != "open" && action != "close" {
-		action = options[0].StringValue()
-		actionOptions = options
+	if (action == "close" || (action == "open" && !quickOpen)) && !b.memberCanManageFeedbackDomains(session, interaction) {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_feedback_staff_only"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
 	}
 
 	if action == "close" {
@@ -253,10 +259,6 @@ func (b *Bot) handleFeedbackCommand(ctx context.Context, session *discordgo.Sess
 
 		ticketOwnerID := strings.TrimPrefix(channel.Topic, "feedback_ticket:")
 		requesterID := interaction.Member.User.ID
-		if requesterID != ticketOwnerID && !b.memberCanManageFeedbackDomains(session, interaction) {
-			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_feedback_close_forbidden"), b.cfg.Notifications.EmbedColors.Error, nil), true)
-			return
-		}
 
 		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, requesterID, "feedback_ticket_close", fmt.Sprintf("user=<@%s> channel=%s owner=<@%s> reason=%q", requesterID, channel.ID, ticketOwnerID, reason))
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "security_feedback_ticket_closed"), b.cfg.Notifications.EmbedColors.Action, []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_reason"), Value: reason, Inline: false}}), true)
@@ -271,6 +273,10 @@ func (b *Bot) handleFeedbackCommand(ctx context.Context, session *discordgo.Sess
 	}
 
 	feedbackType, message, domain := parseFeedbackOpenOptions(actionOptions)
+	if quickOpen {
+		feedbackType = "other"
+		message = b.t(lang, "security_feedback_prompt")
+	}
 	if message == "" {
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_feedback_message"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 		return
