@@ -514,7 +514,6 @@ func (b *Bot) registerCommands() error {
 						discordgo.EnglishUS: "open a feedback ticket",
 						discordgo.SpanishES: "abrir un ticket de feedback",
 					},
-					Required: true,
 					Options: []*discordgo.ApplicationCommandOption{
 						{
 							Type:        discordgo.ApplicationCommandOptionString,
@@ -565,7 +564,6 @@ func (b *Bot) registerCommands() error {
 						discordgo.EnglishUS: "close current feedback ticket",
 						discordgo.SpanishES: "cerrar el ticket feedback actual",
 					},
-					Required: false,
 					Options: []*discordgo.ApplicationCommandOption{
 						{
 							Type:        discordgo.ApplicationCommandOptionString,
