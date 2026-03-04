@@ -23,7 +23,7 @@ func TestPhishingDetection(t *testing.T) {
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{ID: "1", ChannelID: "c1", GuildID: "g1", Author: &discordgo.User{ID: "u1"}, Content: "free nitro https://bad.com"}}
 	allow := map[string]struct{}{}
 	block := map[string]struct{}{"bad.com": {}}
-	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true); !flagged {
+	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true, MessageContext{}); !flagged {
 		t.Fatalf("expected phishing flag")
 	}
 }
@@ -38,12 +38,12 @@ func TestTenorGIFAllowed(t *testing.T) {
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{ID: "2", ChannelID: "c1", GuildID: "g1", Author: &discordgo.User{ID: "u1"}, Content: "fun gif https://media.tenor.com/view/cat-funny-gif-12345"}}
 	allow := map[string]struct{}{}
 	block := map[string]struct{}{}
-	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true); flagged {
+	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true, MessageContext{}); flagged {
 		t.Fatalf("did not expect tenor gif to be flagged")
 	}
 }
 
-func TestTenorThreatURLFlagged(t *testing.T) {
+func TestTenorThreatURLIgnored(t *testing.T) {
 	store, _ := storage.New(":memory:")
 	_ = store.Migrate()
 	auditLogger := audit.NewLogger(store, zap.NewNop())
@@ -53,7 +53,35 @@ func TestTenorThreatURLFlagged(t *testing.T) {
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{ID: "3", ChannelID: "c1", GuildID: "g1", Author: &discordgo.User{ID: "u1"}, Content: "gif weird https://media.tenor.com/view/cat-kys-gif-12345"}}
 	allow := map[string]struct{}{}
 	block := map[string]struct{}{}
-	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true); !flagged {
-		t.Fatalf("expected tenor threat url to be flagged")
+	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true, MessageContext{}); flagged {
+		t.Fatalf("did not expect tenor link to be flagged")
+	}
+}
+
+func TestPrivateThreadKeywordOnlyNotFlagged(t *testing.T) {
+	store, _ := storage.New(":memory:")
+	_ = store.Migrate()
+	auditLogger := audit.NewLogger(store, zap.NewNop())
+	riskEngine := risk.NewEngine(config.RiskConfig{DecayPerMinute: 0, TTLMinutes: 60, TrustWeight: 0.5})
+	module := New(riskEngine, auditLogger)
+
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{ID: "4", ChannelID: "c1", GuildID: "g1", Author: &discordgo.User{ID: "u1"}, Content: "free nitro https://example.com"}}
+	allow := map[string]struct{}{}
+	block := map[string]struct{}{}
+	ctx := MessageContext{ChannelType: discordgo.ChannelTypeGuildPrivateThread}
+	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true, ctx); flagged {
+		t.Fatalf("did not expect keyword-only detection in private thread")
+	}
+}
+
+func TestTrustedGIFURLWithKnownDomain(t *testing.T) {
+	if !isTrustedGIFURL("https://media.tenor.com/view/cat-123", "media.tenor.com") {
+		t.Fatalf("expected media.tenor.com to be trusted")
+	}
+}
+
+func TestTrustedGIFURLWithRawFallback(t *testing.T) {
+	if !isTrustedGIFURL("https://tenor.com/view/funny-cat-123", "") {
+		t.Fatalf("expected tenor raw URL fallback to be trusted")
 	}
 }

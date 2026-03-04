@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"sentinel-adaptive/internal/modules/audit"
 	"sentinel-adaptive/internal/storage"
@@ -21,7 +22,7 @@ func (b *Bot) onInteractionCreate(session *discordgo.Session, interaction *disco
 	ctx := context.Background()
 	data := interaction.ApplicationCommandData()
 	switch data.Name {
-	case "status", "mode", "preset", "lockdown", "rules", "domain", "report", "language", "test", "logs", "risk", "whitelist", "nuke":
+	case "status", "mode", "preset", "lockdown", "rules", "domain", "report", "language", "test", "logs", "risk", "whitelist", "nuke", "feedback":
 		b.handleSecurityCommand(ctx, session, interaction, data.Name, data.Options)
 	case "verify":
 		b.verify.HandleVerify(ctx)
@@ -113,7 +114,7 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 			return
 		}
 		b.risk.Reset(interaction.GuildID, userID)
-		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "risk_reset", "risk score reset")
+		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "risk_reset", fmt.Sprintf("user=<@%s> score_reset=true", userID))
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_risk_title"), b.t(lang, "security_risk_reset"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 	case "mode":
@@ -207,9 +208,204 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 		b.handleWhitelistCommand(ctx, session, interaction, settings, options)
 	case "nuke":
 		b.handleNukeCommand(ctx, session, interaction, settings, options)
+	case "feedback":
+		b.handleFeedbackCommand(ctx, session, interaction, settings, options)
 	default:
 		b.respondEmbed(session, interaction, b.commandEmbed("Security", b.t(lang, "error_unknown"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 	}
+}
+
+func (b *Bot) handleFeedbackCommand(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, settings storage.GuildSettings, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	lang := settings.Language
+	if lang == "" {
+		lang = b.cfg.DefaultLanguage
+	}
+	if interaction.Member == nil || interaction.Member.User == nil {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_user_ctx"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+	if len(options) == 0 {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_no_subcommand"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	action := options[0].Name
+	actionOptions := options[0].Options
+	if action != "open" && action != "close" {
+		action = options[0].StringValue()
+		actionOptions = options
+	}
+
+	if action == "close" {
+		channel, err := session.Channel(interaction.ChannelID)
+		if err != nil || channel == nil || channel.GuildID != interaction.GuildID || !strings.HasPrefix(channel.Topic, "feedback_ticket:") {
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_feedback_close_context"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+
+		reason := "resolved"
+		if len(actionOptions) > 0 {
+			parsed := strings.TrimSpace(actionOptions[0].StringValue())
+			if parsed != "" {
+				reason = parsed
+			}
+		}
+
+		ticketOwnerID := strings.TrimPrefix(channel.Topic, "feedback_ticket:")
+		requesterID := interaction.Member.User.ID
+		if requesterID != ticketOwnerID && !b.memberCanManageFeedbackDomains(session, interaction) {
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_feedback_close_forbidden"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+
+		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, requesterID, "feedback_ticket_close", fmt.Sprintf("user=<@%s> channel=%s owner=<@%s> reason=%q", requesterID, channel.ID, ticketOwnerID, reason))
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "security_feedback_ticket_closed"), b.cfg.Notifications.EmbedColors.Action, []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_reason"), Value: reason, Inline: false}}), true)
+		_, _ = session.ChannelMessageSend(channel.ID, "🔒 "+b.t(lang, "security_feedback_ticket_closed"))
+		_, _ = session.ChannelDelete(channel.ID)
+		return
+	}
+
+	if action != "open" {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_unknown"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	feedbackType, message, domain := parseFeedbackOpenOptions(actionOptions)
+	if message == "" {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_feedback_message"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	if feedbackType == "" {
+		feedbackType = "other"
+	}
+
+	guild, err := session.Guild(interaction.GuildID)
+	if err != nil || guild == nil {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	userID := interaction.Member.User.ID
+	details := fmt.Sprintf("user=<@%s> type=%s message=%q", userID, feedbackType, message)
+	if domain != "" {
+		details += " domain=" + domain
+	}
+	b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "feedback", details)
+
+	channelName := feedbackTicketChannelName(interaction.Member.User.Username, userID)
+	created, err := session.GuildChannelCreateComplex(interaction.GuildID, discordgo.GuildChannelCreateData{
+		Name:  channelName,
+		Type:  discordgo.ChannelTypeGuildText,
+		Topic: "feedback_ticket:" + userID,
+		PermissionOverwrites: []*discordgo.PermissionOverwrite{
+			{ID: guild.ID, Type: discordgo.PermissionOverwriteTypeRole, Deny: discordgo.PermissionViewChannel},
+			{ID: userID, Type: discordgo.PermissionOverwriteTypeMember, Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory | discordgo.PermissionAttachFiles},
+		},
+	})
+	if err != nil || created == nil {
+		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_feedback_channel_create"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	autoAllowlisted := false
+	if feedbackType == "false_positive" && domain != "" && b.memberCanManageFeedbackDomains(session, interaction) {
+		_ = b.store.AddDomainAllow(ctx, interaction.GuildID, domain)
+		_ = b.store.RemoveDomainBlock(ctx, interaction.GuildID, domain)
+		autoAllowlisted = true
+		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "feedback_allowlist", fmt.Sprintf("user=<@%s> domain=%s auto_allowlisted=true", userID, domain))
+	}
+
+	fields := []*discordgo.MessageEmbedField{
+		{Name: b.t(lang, "field_feedback_type"), Value: feedbackType, Inline: true},
+	}
+	if domain != "" {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: b.t(lang, "field_domain"), Value: domain, Inline: true})
+	}
+	if autoAllowlisted {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: b.t(lang, "field_status"), Value: b.t(lang, "feedback_allowlisted"), Inline: false})
+	}
+
+	b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "security_feedback_ticket_opened"), b.cfg.Notifications.EmbedColors.Action, []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_channel"), Value: "<#" + created.ID + ">", Inline: true}}), true)
+	_, _ = session.ChannelMessageSendEmbed(created.ID, &discordgo.MessageEmbed{
+		Title:       b.t(lang, "security_feedback_title"),
+		Description: message,
+		Color:       b.cfg.Notifications.EmbedColors.Action,
+		Fields:      fields,
+	})
+}
+
+func parseFeedbackOpenOptions(options []*discordgo.ApplicationCommandInteractionDataOption) (string, string, string) {
+	feedbackType := ""
+	message := ""
+	domain := ""
+	for _, opt := range options {
+		switch opt.Name {
+		case "type":
+			feedbackType = opt.StringValue()
+		case "message":
+			message = strings.TrimSpace(opt.StringValue())
+		case "domain":
+			domain = strings.ToLower(strings.TrimSpace(opt.StringValue()))
+		}
+	}
+	return feedbackType, message, domain
+}
+
+func feedbackTicketChannelName(username, userID string) string {
+	base := strings.ToLower(strings.TrimSpace(username))
+	if base == "" {
+		base = "user"
+	}
+	builder := strings.Builder{}
+	for _, r := range base {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			builder.WriteRune(r)
+			continue
+		}
+		if r == '-' || r == '_' || unicode.IsSpace(r) {
+			builder.WriteRune('-')
+		}
+	}
+	slug := strings.Trim(builder.String(), "-")
+	if slug == "" {
+		slug = "user"
+	}
+	if len(slug) > 20 {
+		slug = slug[:20]
+	}
+	suffix := userID
+	if len(suffix) > 4 {
+		suffix = suffix[len(suffix)-4:]
+	}
+	return "feedback-" + slug + "-" + suffix
+}
+
+func (b *Bot) memberCanManageFeedbackDomains(session *discordgo.Session, interaction *discordgo.InteractionCreate) bool {
+	if interaction == nil || interaction.GuildID == "" || interaction.Member == nil || interaction.Member.User == nil {
+		return false
+	}
+
+	if session == nil {
+		return false
+	}
+
+	guild, err := session.State.Guild(interaction.GuildID)
+	if err != nil || guild == nil {
+		guild, _ = session.Guild(interaction.GuildID)
+	}
+	if guild == nil {
+		return false
+	}
+	if guild.OwnerID == interaction.Member.User.ID {
+		return true
+	}
+
+	member := interaction.Member
+	if member.GuildID == "" {
+		member.GuildID = interaction.GuildID
+	}
+	return b.memberHasAdmin(guild, member)
 }
 
 func (b *Bot) handleWhitelistCommand(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, settings storage.GuildSettings, options []*discordgo.ApplicationCommandInteractionDataOption) {
@@ -396,7 +592,7 @@ func (b *Bot) handleTestCommand(ctx context.Context, session *discordgo.Session,
 	case "raid":
 		triggered := b.enterLockdown(ctx, interaction.GuildID, "test")
 		if triggered {
-			b.audit.Log(ctx, audit.LevelWarn, interaction.GuildID, userID, "test", "raid lockdown simulated")
+			b.audit.Log(ctx, audit.LevelWarn, interaction.GuildID, userID, "test", fmt.Sprintf("user=<@%s> scenario=raid lockdown_simulated=true", userID))
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_test_title"), b.t(settings.Language, "security_test_raid"), b.cfg.Notifications.EmbedColors.Action, nil), true)
 			return
 		}
@@ -404,14 +600,14 @@ func (b *Bot) handleTestCommand(ctx context.Context, session *discordgo.Session,
 		return
 	case "spam":
 		score := b.risk.AddRisk(interaction.GuildID, userID, 12)
-		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "test", "spam signal simulated")
+		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "test", fmt.Sprintf("user=<@%s> scenario=spam simulated=true score=%.1f", userID, score))
 		b.applyRiskActions(ctx, interaction.GuildID, userID, score, auditOnly, "test scenario=spam")
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(settings.Language, "field_risk_score"), Value: fmt.Sprintf("%.1f", score), Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_test_title"), b.t(settings.Language, "security_test_spam"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 		return
 	case "phishing":
 		score := b.risk.AddRisk(interaction.GuildID, userID, float64(settings.PhishingRisk))
-		b.audit.Log(ctx, audit.LevelWarn, interaction.GuildID, userID, "test", "phishing signal simulated")
+		b.audit.Log(ctx, audit.LevelWarn, interaction.GuildID, userID, "test", fmt.Sprintf("user=<@%s> scenario=phishing simulated=true score=%.1f", userID, score))
 		b.applyRiskActions(ctx, interaction.GuildID, userID, score, auditOnly, "test scenario=phishing")
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(settings.Language, "field_risk_score"), Value: fmt.Sprintf("%.1f", score), Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_test_title"), b.t(settings.Language, "security_test_phishing"), b.cfg.Notifications.EmbedColors.Action, fields), true)
@@ -422,7 +618,7 @@ func (b *Bot) handleTestCommand(ctx context.Context, session *discordgo.Session,
 			points = options[1].IntValue()
 		}
 		score := b.risk.AddRisk(interaction.GuildID, userID, float64(points))
-		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "test", "risk points added")
+		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "test", fmt.Sprintf("user=<@%s> scenario=risk simulated=true points=%d score=%.1f", userID, points, score))
 		b.applyRiskActions(ctx, interaction.GuildID, userID, score, auditOnly, "test scenario=risk")
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(settings.Language, "field_risk_score"), Value: fmt.Sprintf("%.1f", score), Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(settings.Language, "security_test_title"), b.t(settings.Language, "security_test_risk"), b.cfg.Notifications.EmbedColors.Action, fields), true)

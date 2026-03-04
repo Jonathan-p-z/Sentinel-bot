@@ -62,6 +62,7 @@ func (e *Engine) AddRisk(guildID, userID string, delta float64) float64 {
 
 	item.score = e.decay(item.score, item.lastUpdate, now)
 	item.score = math.Max(0, item.score+delta)
+	item.score = e.cap(item.score)
 	item.lastUpdate = now
 
 	return item.score
@@ -84,6 +85,7 @@ func (e *Engine) GetScore(guildID, userID string) float64 {
 	}
 
 	item.score = e.decay(item.score, item.lastUpdate, now)
+	item.score = e.cap(item.score)
 	item.lastUpdate = now
 	return item.score
 }
@@ -136,6 +138,7 @@ func (e *Engine) Top(guildID string, limit int) []ScoreEntry {
 			continue
 		}
 		item.score = e.decay(item.score, item.lastUpdate, now)
+		item.score = e.cap(item.score)
 		item.lastUpdate = now
 		userID := key[len(guildID)+1:]
 		entries = append(entries, ScoreEntry{UserID: userID, Score: item.score})
@@ -148,4 +151,11 @@ func (e *Engine) Top(guildID string, limit int) []ScoreEntry {
 		entries = entries[:limit]
 	}
 	return entries
+}
+
+func (e *Engine) cap(score float64) float64 {
+	if e.cfg.MaxScore <= 0 {
+		return score
+	}
+	return math.Min(e.cfg.MaxScore, score)
 }

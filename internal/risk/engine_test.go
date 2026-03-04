@@ -32,3 +32,18 @@ func TestRiskDecayAndTrust(t *testing.T) {
 		t.Fatalf("expected 4, got %f", effective)
 	}
 }
+
+func TestRiskIsCapped(t *testing.T) {
+	rCfg := config.RiskConfig{DecayPerMinute: 0, TTLMinutes: 60, TrustWeight: 0.5, MaxScore: 200}
+	engine := NewEngine(rCfg)
+
+	score := engine.AddRisk("g1", "u1", 500)
+	if score != 200 {
+		t.Fatalf("expected capped score 200, got %f", score)
+	}
+
+	score = engine.AddRisk("g1", "u1", 120)
+	if score != 200 {
+		t.Fatalf("expected capped score 200 after additional risk, got %f", score)
+	}
+}

@@ -107,6 +107,13 @@ Set HEALTH_ENABLED=true and HEALTH_ADDR=":8080" to expose /health.
 - /whitelist add|remove|list [user] [role]
 - /nuke status|enable|disable|set
 - /verify
+- /feedback open type message [domain]
+- /feedback close [reason]
+
+Feedback notes:
+- `/feedback open` creates a dedicated private ticket channel for the reporter.
+- `type=false_positive` with `domain` lets admins auto-allowlist trusted domains.
+- `/feedback close` can be run in the ticket channel by its owner or an admin to close it.
 
 ## Anti-Nuke and Whitelist
 Anti-nuke detects rapid destructive actions from a single actor and responds automatically.

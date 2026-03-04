@@ -496,6 +496,92 @@ func (b *Bot) registerCommands() error {
 				discordgo.SpanishES: "Flujo de verificacion",
 			},
 		},
+		{
+			Name:        "feedback",
+			Description: "Send moderation feedback",
+			DescriptionLocalizations: &map[discordgo.Locale]string{
+				discordgo.French:    "Envoyer un retour de moderation",
+				discordgo.EnglishUS: "Send moderation feedback",
+				discordgo.SpanishES: "Enviar feedback de moderacion",
+			},
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "open",
+					Description: "open a feedback ticket",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "ouvrir un ticket feedback",
+						discordgo.EnglishUS: "open a feedback ticket",
+						discordgo.SpanishES: "abrir un ticket de feedback",
+					},
+					Required: true,
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:        discordgo.ApplicationCommandOptionString,
+							Name:        "type",
+							Description: "feedback type",
+							DescriptionLocalizations: map[discordgo.Locale]string{
+								discordgo.French:    "type de retour",
+								discordgo.EnglishUS: "feedback type",
+								discordgo.SpanishES: "tipo de feedback",
+							},
+							Required: true,
+							Choices: []*discordgo.ApplicationCommandOptionChoice{
+								{Name: "false_positive", Value: "false_positive"},
+								{Name: "bug", Value: "bug"},
+								{Name: "other", Value: "other"},
+							},
+						},
+						{
+							Type:        discordgo.ApplicationCommandOptionString,
+							Name:        "message",
+							Description: "feedback details",
+							DescriptionLocalizations: map[discordgo.Locale]string{
+								discordgo.French:    "details du retour",
+								discordgo.EnglishUS: "feedback details",
+								discordgo.SpanishES: "detalles del feedback",
+							},
+							Required: true,
+						},
+						{
+							Type:        discordgo.ApplicationCommandOptionString,
+							Name:        "domain",
+							Description: "domain for false positives",
+							DescriptionLocalizations: map[discordgo.Locale]string{
+								discordgo.French:    "domaine pour faux positifs",
+								discordgo.EnglishUS: "domain for false positives",
+								discordgo.SpanishES: "dominio para falsos positivos",
+							},
+							Required: false,
+						},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "close",
+					Description: "close current feedback ticket",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "fermer le ticket feedback actuel",
+						discordgo.EnglishUS: "close current feedback ticket",
+						discordgo.SpanishES: "cerrar el ticket feedback actual",
+					},
+					Required: false,
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:        discordgo.ApplicationCommandOptionString,
+							Name:        "reason",
+							Description: "close reason",
+							DescriptionLocalizations: map[discordgo.Locale]string{
+								discordgo.French:    "raison de fermeture",
+								discordgo.EnglishUS: "close reason",
+								discordgo.SpanishES: "motivo de cierre",
+							},
+							Required: false,
+						},
+					},
+				},
+			},
+		},
 	}
 
 	appID := b.session.State.User.ID

@@ -51,6 +51,8 @@ type Bot struct {
 	warnAggMu      sync.Mutex
 	detectAgg      map[string]*detectionAggregate
 	detectAggMu    sync.Mutex
+	riskActionAgg  map[string]*riskActionAggregate
+	riskActionMu   sync.Mutex
 	lockdownMu     sync.Mutex
 	lockdownMap    map[string]*lockdownSnapshot
 }
@@ -75,6 +77,10 @@ type detectionAggregate struct {
 	count     int
 	lastAt    time.Time
 	lastInfo  string
+}
+
+type riskActionAggregate struct {
+	lastAt time.Time
 }
 
 type lockdownSnapshot struct {
@@ -102,19 +108,20 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 		discordgo.IntentsGuildVoiceStates
 
 	b := &Bot{
-		cfg:         cfg,
-		logger:      logger,
-		store:       store,
-		risk:        riskEngine,
-		trust:       trustEngine,
-		playbook:    playbookEngine,
-		audit:       auditLogger,
-		analytics:   analyticsEngine,
-		session:     session,
-		auditAgg:    make(map[string]*auditAggregate),
-		warnAgg:     make(map[string]*warningAggregate),
-		detectAgg:   make(map[string]*detectionAggregate),
-		lockdownMap: make(map[string]*lockdownSnapshot),
+		cfg:           cfg,
+		logger:        logger,
+		store:         store,
+		risk:          riskEngine,
+		trust:         trustEngine,
+		playbook:      playbookEngine,
+		audit:         auditLogger,
+		analytics:     analyticsEngine,
+		session:       session,
+		auditAgg:      make(map[string]*auditAggregate),
+		warnAgg:       make(map[string]*warningAggregate),
+		detectAgg:     make(map[string]*detectionAggregate),
+		riskActionAgg: make(map[string]*riskActionAggregate),
+		lockdownMap:   make(map[string]*lockdownSnapshot),
 	}
 
 	b.antispam = antispam.New(cfg.Thresholds, riskEngine, auditLogger)
@@ -192,7 +199,13 @@ func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.Message
 	auditOnly := b.isAuditMode(settings)
 
 	allowlist, blocklist := b.getDomainLists(ctx, msg.GuildID)
-	if _, flagged, detail := b.antiphish.HandleMessage(ctx, session, msg, msg.GuildID, allowlist, blocklist, settings.PhishingRisk, auditOnly); flagged {
+	messageContext := antiphishing.MessageContext{}
+	if channel, err := session.State.Channel(msg.ChannelID); err == nil && channel != nil {
+		messageContext.ChannelType = channel.Type
+	} else if channel, err := session.Channel(msg.ChannelID); err == nil && channel != nil {
+		messageContext.ChannelType = channel.Type
+	}
+	if _, flagged, detail := b.antiphish.HandleMessage(ctx, session, msg, msg.GuildID, allowlist, blocklist, settings.PhishingRisk, auditOnly, messageContext); flagged {
 		count := b.handlePhishingDetection(ctx, msg.GuildID, msg.Author.ID, detail, auditOnly)
 		threshold := b.phishingThreshold()
 		if count >= threshold {
@@ -249,7 +262,7 @@ func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.Guil
 		if b.store != nil {
 			if banned, err := b.store.IsBannedUser(ctx, event.GuildID, userID); err == nil && banned {
 				_ = b.session.GuildBanCreateWithReason(event.GuildID, userID, "Sentinel Adaptive persistent ban", 0)
-				b.audit.Log(ctx, audit.LevelWarn, event.GuildID, userID, "persistent_ban_reapply", "rejoin blocked")
+				b.audit.Log(ctx, audit.LevelWarn, event.GuildID, userID, "persistent_ban_reapply", fmt.Sprintf("user=<@%s> reason=persistent_ban rejoin_blocked=true", userID))
 				return
 			}
 		}
@@ -258,7 +271,7 @@ func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.Guil
 	if b.antiraid.HandleJoin(ctx, session, event) {
 		b.enterLockdown(ctx, event.GuildID, "anti_raid")
 		if event.Member != nil && event.Member.User != nil {
-			b.banAndStore(ctx, event.GuildID, event.Member.User.ID, "raid_detected")
+			b.applyRaidRestriction(ctx, event.GuildID, event.Member.User.ID)
 		}
 	}
 }
@@ -360,7 +373,7 @@ func (b *Bot) handleNukeAction(ctx context.Context, guildID, actorID, action, ta
 		return
 	}
 	if b.userIsAboveBot(guildID, actorID) {
-		b.audit.Log(ctx, audit.LevelInfo, guildID, actorID, "nuke_ignored", "actor above bot hierarchy")
+		b.audit.Log(ctx, audit.LevelInfo, guildID, actorID, "nuke_ignored", fmt.Sprintf("user=<@%s> action=%s target=%s reason=actor_above_bot_hierarchy", actorID, action, targetID))
 		return
 	}
 	if b.isWhitelisted(ctx, guildID, actorID) {
@@ -374,10 +387,19 @@ func (b *Bot) handleNukeAction(ctx context.Context, guildID, actorID, action, ta
 		}
 		b.antinukeExempt.SetWindow(exemptWindow)
 		count := b.antinukeExempt.Count(guildID, actorID, action)
-		if count != exemptThreshold {
+		totalCount := b.antinukeExempt.CountAny(guildID, actorID)
+		exemptGlobalThreshold := exemptThreshold
+		if exemptGlobalThreshold < 8 {
+			exemptGlobalThreshold = 8
+		}
+		if count < exemptThreshold && totalCount < exemptGlobalThreshold {
 			return
 		}
-		detail := fmt.Sprintf("action=%s count=%d threshold=%d target=%s exempt=true", action, count, exemptThreshold, targetID)
+		mode := "single"
+		if totalCount >= exemptGlobalThreshold {
+			mode = "multi"
+		}
+		detail := fmt.Sprintf("action=%s count=%d threshold=%d total=%d total_threshold=%d target=%s exempt=true mode=%s", action, count, exemptThreshold, totalCount, exemptGlobalThreshold, targetID, mode)
 		b.audit.Log(ctx, audit.LevelCrit, guildID, actorID, "anti_nuke", detail)
 		b.enterLockdown(ctx, guildID, "anti_nuke_exempt")
 		return
@@ -388,11 +410,20 @@ func (b *Bot) handleNukeAction(ctx context.Context, guildID, actorID, action, ta
 	}
 	b.antinuke.SetWindow(window)
 	count := b.antinuke.Count(guildID, actorID, action)
-	if count != threshold {
+	totalCount := b.antinuke.CountAny(guildID, actorID)
+	globalThreshold := threshold + 1
+	if globalThreshold < 4 {
+		globalThreshold = 4
+	}
+	if count < threshold && totalCount < globalThreshold {
 		return
 	}
 
-	detail := fmt.Sprintf("action=%s count=%d threshold=%d target=%s", action, count, threshold, targetID)
+	mode := "single"
+	if totalCount >= globalThreshold {
+		mode = "multi"
+	}
+	detail := fmt.Sprintf("action=%s count=%d threshold=%d total=%d total_threshold=%d target=%s mode=%s", action, count, threshold, totalCount, globalThreshold, targetID, mode)
 	b.audit.Log(ctx, audit.LevelCrit, guildID, actorID, "anti_nuke", detail)
 	b.enterLockdown(ctx, guildID, "anti_nuke")
 	b.applyNukeSanction(ctx, guildID, actorID)
@@ -449,7 +480,7 @@ func (b *Bot) applyNukeSanction(ctx context.Context, guildID, userID string) {
 		return
 	}
 	if !b.cfg.Actions.Enabled {
-		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "enforcement_disabled", "nuke sanction blocked")
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "enforcement_disabled", fmt.Sprintf("user=<@%s> action=ban source=nuke reason=actions_disabled", userID))
 		return
 	}
 	b.banAndStore(ctx, guildID, userID, "anti_nuke_instant_ban")
@@ -460,13 +491,39 @@ func (b *Bot) banAndStore(ctx context.Context, guildID, userID, reason string) {
 		return
 	}
 	if err := b.session.GuildBanCreateWithReason(guildID, userID, "Sentinel Adaptive enforcement", 0); err != nil {
-		b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", "instant ban failed")
+		b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", fmt.Sprintf("user=<@%s> action=ban source=instant_ban error=%q", userID, err.Error()))
 		return
 	}
 	if b.store != nil {
 		_ = b.store.AddBannedUser(ctx, guildID, userID, reason)
 	}
 	b.audit.Log(ctx, audit.LevelCrit, guildID, userID, "instant_ban", reason)
+}
+
+func (b *Bot) applyRaidRestriction(ctx context.Context, guildID, userID string) {
+	if guildID == "" || userID == "" {
+		return
+	}
+	if b.userIsAboveBot(guildID, userID) {
+		return
+	}
+
+	minutes := b.cfg.Actions.TimeoutMinutes
+	if minutes <= 0 {
+		minutes = 10
+	}
+
+	if !b.cfg.Actions.Enabled {
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "enforcement_disabled", fmt.Sprintf("user=<@%s> action=timeout source=anti_raid reason=actions_disabled", userID))
+		return
+	}
+
+	until := time.Now().Add(time.Duration(minutes) * time.Minute)
+	if err := b.session.GuildMemberTimeout(guildID, userID, &until); err != nil {
+		b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", fmt.Sprintf("user=<@%s> action=timeout source=anti_raid duration_minutes=%d error=%q", userID, minutes, err.Error()))
+		return
+	}
+	b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "anti_raid_timeout", fmt.Sprintf("user=<@%s> duration_minutes=%d", userID, minutes))
 }
 
 func (b *Bot) enterLockdown(ctx context.Context, guildID, reason string) bool {
@@ -712,7 +769,7 @@ func highestRolePosition(guild *discordgo.Guild, member *discordgo.Member) int {
 
 func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, score float64, auditOnly bool, triggerDetail string) {
 	if b.userIsAboveBot(guildID, userID) {
-		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "risk_ignored", "target above bot hierarchy")
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "risk_ignored", fmt.Sprintf("user=<@%s> reason=target_above_bot_hierarchy", userID))
 		return
 	}
 
@@ -746,6 +803,10 @@ func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, scor
 		return
 	}
 
+	if b.shouldSuppressRiskAction(guildID, userID, action, auditOnly) {
+		return
+	}
+
 	reason := fmt.Sprintf("action=%s effective=%.1f risk=%.1f trust=%.1f mode=%s", action, effective, score, trustScore, settings.Mode)
 	if triggerDetail != "" {
 		reason += " trigger=" + triggerDetail
@@ -756,19 +817,19 @@ func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, scor
 	b.warnUser(userID, b.buildUserWarningEmbed(lang, action, score, trustScore, effective, auditOnly))
 
 	if auditOnly {
-		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "audit_mode", "sanction simulated")
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "audit_mode", fmt.Sprintf("user=<@%s> action=%s simulated=true", userID, action))
 		return
 	}
 
 	if !actions.Enabled {
-		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "enforcement_disabled", "actions disabled")
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "enforcement_disabled", fmt.Sprintf("user=<@%s> action=%s source=risk_action reason=actions_disabled", userID, action))
 		return
 	}
 
 	switch action {
 	case "ban":
 		if err := b.session.GuildBanCreateWithReason(guildID, userID, "Sentinel Adaptive risk ban", 0); err != nil {
-			b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", "ban failed")
+			b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", fmt.Sprintf("user=<@%s> action=ban source=risk_action error=%q", userID, err.Error()))
 			b.sendSecurityEmbed(ctx, guildID, b.buildErrorEmbed(lang, userID, b.t(lang, "action_ban_failed"), err))
 		}
 	case "timeout":
@@ -778,21 +839,21 @@ func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, scor
 		}
 		until := time.Now().Add(time.Duration(minutes) * time.Minute)
 		if err := b.session.GuildMemberTimeout(guildID, userID, &until); err != nil {
-			b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", "timeout failed")
+			b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", fmt.Sprintf("user=<@%s> action=timeout source=risk_action duration_minutes=%d error=%q", userID, minutes, err.Error()))
 			b.sendSecurityEmbed(ctx, guildID, b.buildErrorEmbed(lang, userID, b.t(lang, "action_timeout_failed"), err))
 		}
 	case "quarantine":
 		if actions.QuarantineRoleID == "" {
-			b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", "quarantine role not set")
+			b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", fmt.Sprintf("user=<@%s> action=quarantine source=risk_action error=%q", userID, "quarantine role not set"))
 			b.sendSecurityEmbed(ctx, guildID, b.buildErrorEmbed(lang, userID, b.t(lang, "action_quarantine_role_missing"), nil))
 			return
 		}
 		if err := b.session.GuildMemberRoleAdd(guildID, userID, actions.QuarantineRoleID); err != nil {
-			b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", "quarantine role add failed")
+			b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", fmt.Sprintf("user=<@%s> action=quarantine source=risk_action role_id=%s error=%q", userID, actions.QuarantineRoleID, err.Error()))
 			b.sendSecurityEmbed(ctx, guildID, b.buildErrorEmbed(lang, userID, b.t(lang, "action_quarantine_failed"), err))
 		}
 	case "delete":
-		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "action_skipped", "delete requires message context")
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "action_skipped", fmt.Sprintf("user=<@%s> action=delete reason=missing_message_context", userID))
 		b.sendSecurityEmbed(ctx, guildID, b.buildErrorEmbed(lang, userID, b.t(lang, "action_delete_requires_context"), nil))
 	}
 }
@@ -870,6 +931,29 @@ func (b *Bot) sendChannelWarning(ctx context.Context, guildID, userID, action st
 	b.warnAggMu.Lock()
 	b.warnAgg[key] = &warningAggregate{channelID: channelID, messageID: msg.ID, count: 1, lastAt: time.Now()}
 	b.warnAggMu.Unlock()
+}
+
+func (b *Bot) shouldSuppressRiskAction(guildID, userID, action string, auditOnly bool) bool {
+	if guildID == "" || userID == "" || action == "" {
+		return false
+	}
+	key := guildID + "|" + userID + "|" + action
+	if auditOnly {
+		key += "|audit"
+	}
+	window := 45 * time.Second
+
+	b.riskActionMu.Lock()
+	defer b.riskActionMu.Unlock()
+
+	if agg := b.riskActionAgg[key]; agg != nil {
+		if time.Since(agg.lastAt) <= window {
+			agg.lastAt = time.Now()
+			return true
+		}
+	}
+	b.riskActionAgg[key] = &riskActionAggregate{lastAt: time.Now()}
+	return false
 }
 
 func (b *Bot) buildActionEmbed(lang, userID, action string, riskScore, trustScore, effective float64, auditOnly bool) *discordgo.MessageEmbed {
@@ -1168,22 +1252,6 @@ func (b *Bot) formatAuditDetails(lang string, entry storage.AuditLog) string {
 	}
 
 	switch entry.Event {
-	case "anti_phishing":
-		return b.clipAuditDetails(entry.Details)
-	case "anti_spam":
-		return b.clipAuditDetails(entry.Details)
-	case "anti_hate":
-		return b.clipAuditDetails(entry.Details)
-	case "anti_raid":
-		return b.t(lang, "label_cause") + ": " + b.t(lang, "cause_raid_burst")
-	case "enforcement_disabled":
-		return b.t(lang, "label_status") + ": " + b.t(lang, "status_enforcement_disabled")
-	case "audit_mode":
-		return b.t(lang, "label_status") + ": " + b.t(lang, "status_audit")
-	case "action_failed":
-		return b.t(lang, "label_status") + ": " + entry.Details
-	case "action_skipped":
-		return b.t(lang, "label_note") + ": " + entry.Details
 	case "risk_action":
 		details := entry.Details
 		trigger := ""
@@ -1223,12 +1291,12 @@ func (b *Bot) formatAuditDetails(lang string, entry storage.AuditLog) string {
 			lines = append(lines, b.t(lang, "label_cause")+": "+b.clipAuditDetails(trigger))
 		}
 		if len(lines) == 0 {
-			return entry.Details
+			return b.clipAuditDetails(entry.Details)
 		}
 		return strings.Join(lines, "\n")
 	}
 
-	return entry.Details
+	return b.clipAuditDetails(entry.Details)
 }
 
 func (b *Bot) clipAuditDetails(details string) string {

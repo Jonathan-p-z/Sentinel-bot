@@ -8,16 +8,21 @@ import (
 )
 
 type Module struct {
-	mu      sync.Mutex
-	windows map[string]*utils.SlidingWindow
-	window  time.Duration
+	mu         sync.Mutex
+	windows    map[string]*utils.SlidingWindow
+	anyWindows map[string]*utils.SlidingWindow
+	window     time.Duration
 }
 
 func New(window time.Duration) *Module {
 	if window <= 0 {
 		window = 20 * time.Second
 	}
-	return &Module{windows: make(map[string]*utils.SlidingWindow), window: window}
+	return &Module{
+		windows:    make(map[string]*utils.SlidingWindow),
+		anyWindows: make(map[string]*utils.SlidingWindow),
+		window:     window,
+	}
 }
 
 func (m *Module) SetWindow(window time.Duration) {
@@ -35,6 +40,12 @@ func (m *Module) Count(guildID, actorID, action string) int {
 	return window.Add(time.Now())
 }
 
+func (m *Module) CountAny(guildID, actorID string) int {
+	key := guildID + ":" + actorID + ":any"
+	window := m.getAnyWindow(key)
+	return window.Add(time.Now())
+}
+
 func (m *Module) getWindow(key string) *utils.SlidingWindow {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -42,6 +53,17 @@ func (m *Module) getWindow(key string) *utils.SlidingWindow {
 	if window == nil {
 		window = utils.NewSlidingWindow(m.window)
 		m.windows[key] = window
+	}
+	return window
+}
+
+func (m *Module) getAnyWindow(key string) *utils.SlidingWindow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	window := m.anyWindows[key]
+	if window == nil {
+		window = utils.NewSlidingWindow(m.window)
+		m.anyWindows[key] = window
 	}
 	return window
 }

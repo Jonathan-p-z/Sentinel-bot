@@ -13,7 +13,7 @@ import (
 
 type Config struct {
 	DiscordToken              string         `yaml:"discord_token"`
-	DatabaseURL               string         `yaml:"database_url"` 
+	DatabaseURL               string         `yaml:"database_url"`
 	LogLevel                  string         `yaml:"log_level"`
 	DefaultSecurityLogChannel string         `yaml:"default_security_log_channel"`
 	DefaultLanguage           string         `yaml:"default_language"`
@@ -39,6 +39,7 @@ type RiskConfig struct {
 	DecayPerMinute float64 `yaml:"decay_per_minute"`
 	TTLMinutes     int     `yaml:"ttl_minutes"`
 	TrustWeight    float64 `yaml:"trust_weight"`
+	MaxScore       float64 `yaml:"max_score"`
 }
 
 type TrustConfig struct {
@@ -106,7 +107,7 @@ type EmbedColors struct {
 
 func DefaultConfig() Config {
 	return Config{
-		DatabaseURL:               "", 
+		DatabaseURL:               "",
 		LogLevel:                  "info",
 		RetentionDays:             14,
 		RulePreset:                "medium",
@@ -114,7 +115,7 @@ func DefaultConfig() Config {
 		DefaultSecurityLogChannel: "",
 		DefaultLanguage:           "fr",
 		Health:                    HealthConfig{Enabled: false, Addr: ":8080"},
-		Risk:                      RiskConfig{DecayPerMinute: 0.5, TTLMinutes: 60, TrustWeight: 0.5},
+		Risk:                      RiskConfig{DecayPerMinute: 0.5, TTLMinutes: 60, TrustWeight: 0.5, MaxScore: 200},
 		Trust:                     TrustConfig{MaxScore: 100, TTLMinutes: 1440},
 		Thresholds: Thresholds{
 			SpamMessages:       6,
@@ -127,17 +128,17 @@ func DefaultConfig() Config {
 		},
 		Nuke: NukeConfig{
 			Enabled:             true,
-			WindowSeconds:        20,
-			ChannelDelete:        3,
-			ChannelCreate:        6,
-			ChannelUpdate:        6,
-			RoleDelete:           3,
-			RoleCreate:           6,
-			RoleUpdate:           6,
-			WebhookUpdate:        4,
-			BanAdd:               3,
-			GuildUpdate:          2,
-			ExemptThreshold:      20,
+			WindowSeconds:       20,
+			ChannelDelete:       3,
+			ChannelCreate:       6,
+			ChannelUpdate:       6,
+			RoleDelete:          3,
+			RoleCreate:          6,
+			RoleUpdate:          6,
+			WebhookUpdate:       4,
+			BanAdd:              3,
+			GuildUpdate:         2,
+			ExemptThreshold:     20,
 			ExemptWindowSeconds: 10,
 		},
 		Actions: ActionConfig{

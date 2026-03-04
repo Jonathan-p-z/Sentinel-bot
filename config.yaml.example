@@ -15,6 +15,7 @@ risk:
   decay_per_minute: 0.5
   ttl_minutes: 60
   trust_weight: 0.5
+  max_score: 200
 
 trust:
   max_score: 100
