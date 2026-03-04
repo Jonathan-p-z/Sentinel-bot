@@ -237,7 +237,7 @@ func (b *Bot) handleFeedbackCommand(ctx context.Context, session *discordgo.Sess
 		}
 	}
 
-	if (action == "close" || (action == "open" && !quickOpen)) && !b.memberCanManageFeedbackDomains(session, interaction) {
+	if (action == "close" || (action == "open" && !quickOpen)) && !b.userIsAboveBot(interaction.GuildID, interaction.Member.User.ID) {
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_feedback_staff_only"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 		return
 	}
@@ -272,7 +272,7 @@ func (b *Bot) handleFeedbackCommand(ctx context.Context, session *discordgo.Sess
 		return
 	}
 
-	feedbackType, message, domain := parseFeedbackOpenOptions(actionOptions)
+	feedbackType, message, domain, targetUserID := parseFeedbackOpenOptions(session, actionOptions)
 	if quickOpen {
 		feedbackType = "other"
 		message = b.t(lang, "security_feedback_prompt")
@@ -292,22 +292,36 @@ func (b *Bot) handleFeedbackCommand(ctx context.Context, session *discordgo.Sess
 		return
 	}
 
-	userID := interaction.Member.User.ID
-	details := fmt.Sprintf("user=<@%s> type=%s message=%q", userID, feedbackType, message)
+	requesterID := interaction.Member.User.ID
+	userID := requesterID
+	if targetUserID != "" {
+		userID = targetUserID
+	}
+	details := fmt.Sprintf("user=<@%s> target=<@%s> type=%s message=%q", requesterID, userID, feedbackType, message)
 	if domain != "" {
 		details += " domain=" + domain
 	}
-	b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "feedback", details)
+	b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, requesterID, "feedback", details)
 
-	channelName := feedbackTicketChannelName(interaction.Member.User.Username, userID)
+	targetUsername := interaction.Member.User.Username
+	if userID != requesterID {
+		if member, err := session.GuildMember(interaction.GuildID, userID); err == nil && member != nil && member.User != nil {
+			targetUsername = member.User.Username
+		}
+	}
+
+	overwrites := []*discordgo.PermissionOverwrite{
+		{ID: guild.ID, Type: discordgo.PermissionOverwriteTypeRole, Deny: discordgo.PermissionViewChannel},
+		{ID: userID, Type: discordgo.PermissionOverwriteTypeMember, Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory | discordgo.PermissionAttachFiles},
+	}
+	overwrites = append(overwrites, b.feedbackStaffOverwrites(guild)...)
+
+	channelName := feedbackTicketChannelName(targetUsername, userID)
 	created, err := session.GuildChannelCreateComplex(interaction.GuildID, discordgo.GuildChannelCreateData{
-		Name:  channelName,
-		Type:  discordgo.ChannelTypeGuildText,
-		Topic: "feedback_ticket:" + userID,
-		PermissionOverwrites: []*discordgo.PermissionOverwrite{
-			{ID: guild.ID, Type: discordgo.PermissionOverwriteTypeRole, Deny: discordgo.PermissionViewChannel},
-			{ID: userID, Type: discordgo.PermissionOverwriteTypeMember, Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory | discordgo.PermissionAttachFiles},
-		},
+		Name:                 channelName,
+		Type:                 discordgo.ChannelTypeGuildText,
+		Topic:                "feedback_ticket:" + userID,
+		PermissionOverwrites: overwrites,
 	})
 	if err != nil || created == nil {
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_feedback_title"), b.t(lang, "error_feedback_channel_create"), b.cfg.Notifications.EmbedColors.Error, nil), true)
@@ -319,11 +333,12 @@ func (b *Bot) handleFeedbackCommand(ctx context.Context, session *discordgo.Sess
 		_ = b.store.AddDomainAllow(ctx, interaction.GuildID, domain)
 		_ = b.store.RemoveDomainBlock(ctx, interaction.GuildID, domain)
 		autoAllowlisted = true
-		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "feedback_allowlist", fmt.Sprintf("user=<@%s> domain=%s auto_allowlisted=true", userID, domain))
+		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, requesterID, "feedback_allowlist", fmt.Sprintf("user=<@%s> target=<@%s> domain=%s auto_allowlisted=true", requesterID, userID, domain))
 	}
 
 	fields := []*discordgo.MessageEmbedField{
 		{Name: b.t(lang, "field_feedback_type"), Value: feedbackType, Inline: true},
+		{Name: b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
 	}
 	if domain != "" {
 		fields = append(fields, &discordgo.MessageEmbedField{Name: b.t(lang, "field_domain"), Value: domain, Inline: true})
@@ -341,10 +356,11 @@ func (b *Bot) handleFeedbackCommand(ctx context.Context, session *discordgo.Sess
 	})
 }
 
-func parseFeedbackOpenOptions(options []*discordgo.ApplicationCommandInteractionDataOption) (string, string, string) {
+func parseFeedbackOpenOptions(session *discordgo.Session, options []*discordgo.ApplicationCommandInteractionDataOption) (string, string, string, string) {
 	feedbackType := ""
 	message := ""
 	domain := ""
+	targetUserID := ""
 	for _, opt := range options {
 		switch opt.Name {
 		case "type":
@@ -353,9 +369,48 @@ func parseFeedbackOpenOptions(options []*discordgo.ApplicationCommandInteraction
 			message = strings.TrimSpace(opt.StringValue())
 		case "domain":
 			domain = strings.ToLower(strings.TrimSpace(opt.StringValue()))
+		case "user":
+			if session != nil {
+				if user := opt.UserValue(session); user != nil {
+					targetUserID = user.ID
+				}
+			}
 		}
 	}
-	return feedbackType, message, domain
+	return feedbackType, message, domain, targetUserID
+}
+
+func (b *Bot) feedbackStaffOverwrites(guild *discordgo.Guild) []*discordgo.PermissionOverwrite {
+	if guild == nil || b.session == nil || b.session.State == nil || b.session.State.User == nil {
+		return nil
+	}
+
+	botMember := b.memberForUser(guild.ID, b.session.State.User.ID)
+	if botMember == nil {
+		return nil
+	}
+
+	botHighest := highestRolePosition(guild, botMember)
+	if botHighest < 0 {
+		return nil
+	}
+
+	overwrites := make([]*discordgo.PermissionOverwrite, 0)
+	allow := int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory | discordgo.PermissionAttachFiles)
+	for _, role := range guild.Roles {
+		if role == nil || role.ID == guild.ID {
+			continue
+		}
+		if role.Position > botHighest {
+			overwrites = append(overwrites, &discordgo.PermissionOverwrite{
+				ID:    role.ID,
+				Type:  discordgo.PermissionOverwriteTypeRole,
+				Allow: allow,
+			})
+		}
+	}
+
+	return overwrites
 }
 
 func feedbackTicketChannelName(username, userID string) string {

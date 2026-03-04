@@ -543,6 +543,17 @@ func (b *Bot) registerCommands() error {
 							Required: true,
 						},
 						{
+							Type:        discordgo.ApplicationCommandOptionUser,
+							Name:        "user",
+							Description: "target user for this ticket",
+							DescriptionLocalizations: map[discordgo.Locale]string{
+								discordgo.French:    "utilisateur cible pour ce ticket",
+								discordgo.EnglishUS: "target user for this ticket",
+								discordgo.SpanishES: "usuario objetivo para este ticket",
+							},
+							Required: false,
+						},
+						{
 							Type:        discordgo.ApplicationCommandOptionString,
 							Name:        "domain",
 							Description: "domain for false positives",
