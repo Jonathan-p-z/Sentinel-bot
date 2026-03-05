@@ -265,6 +265,11 @@ func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.Guil
 		userID := event.Member.User.ID
 		if b.store != nil {
 			if banReason, banned, err := b.store.GetBannedUserReason(ctx, event.GuildID, userID); err == nil && banned {
+				if banReason == "discord_ban_event" {
+					_ = b.store.RemoveBannedUser(ctx, event.GuildID, userID)
+					b.audit.Log(ctx, audit.LevelInfo, event.GuildID, userID, "persistent_ban_skipped", fmt.Sprintf("user=<@%s> reason=%q stale_marker_removed=true", userID, banReason))
+					return
+				}
 				reapplyReason := fmt.Sprintf("Sentinel persistent ban reapply: %s", banReason)
 				if len(reapplyReason) > 512 {
 					reapplyReason = reapplyReason[:512]
@@ -381,7 +386,13 @@ func (b *Bot) onGuildBanAdd(session *discordgo.Session, event *discordgo.GuildBa
 	}
 	ctx := context.Background()
 	if b.store != nil {
-		_ = b.store.AddBannedUser(ctx, event.GuildID, event.User.ID, "discord_ban_event")
+		if _, exists, err := b.store.GetBannedUserReason(ctx, event.GuildID, event.User.ID); err == nil {
+			if !exists {
+				_ = b.store.AddBannedUser(ctx, event.GuildID, event.User.ID, "discord_ban_event")
+			}
+		} else {
+			b.audit.Log(ctx, audit.LevelWarn, event.GuildID, event.User.ID, "ban_persistence_lookup_failed", fmt.Sprintf("user=<@%s> error=%q", event.User.ID, err.Error()))
+		}
 	}
 	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionMemberBanAdd, event.User.ID)
 	b.handleNukeAction(ctx, event.GuildID, actorID, "ban_add", event.User.ID)
