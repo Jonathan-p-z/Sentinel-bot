@@ -55,3 +55,6 @@ logs/
 # ==========================================
 # Si tu veux que ton .gitignore reste purement local à cette VM
 .gitignore
+/.github/ 
+/.github/copilot-instructions.md
+

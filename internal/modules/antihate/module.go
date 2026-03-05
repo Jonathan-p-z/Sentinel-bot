@@ -120,6 +120,27 @@ var blockedKeywords = []string{
 	"v1ol",
 }
 
+func init() {
+	// Keep both original and uppercase variants in the keyword list.
+	expanded := make([]string, 0, len(blockedKeywords)*2)
+	seen := make(map[string]struct{}, len(blockedKeywords)*2)
+
+	for _, keyword := range blockedKeywords {
+		if _, ok := seen[keyword]; !ok {
+			expanded = append(expanded, keyword)
+			seen[keyword] = struct{}{}
+		}
+
+		upper := strings.ToUpper(keyword)
+		if _, ok := seen[upper]; !ok {
+			expanded = append(expanded, upper)
+			seen[upper] = struct{}{}
+		}
+	}
+
+	blockedKeywords = expanded
+}
+
 type Module struct {
 	risk  *risk.Engine
 	audit *audit.Logger

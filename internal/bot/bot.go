@@ -53,6 +53,8 @@ type Bot struct {
 	detectAggMu    sync.Mutex
 	riskActionAgg  map[string]*riskActionAggregate
 	riskActionMu   sync.Mutex
+	modWarns       map[string]int
+	modWarnsMu     sync.Mutex
 	lockdownMu     sync.Mutex
 	lockdownMap    map[string]*lockdownSnapshot
 }
@@ -121,6 +123,7 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 		warnAgg:       make(map[string]*warningAggregate),
 		detectAgg:     make(map[string]*detectionAggregate),
 		riskActionAgg: make(map[string]*riskActionAggregate),
+		modWarns:      make(map[string]int),
 		lockdownMap:   make(map[string]*lockdownSnapshot),
 	}
 
@@ -337,6 +340,34 @@ func (b *Bot) onWebhooksUpdate(session *discordgo.Session, event *discordgo.Webh
 	ctx := context.Background()
 	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionWebhookUpdate, event.ChannelID)
 	b.handleNukeAction(ctx, event.GuildID, actorID, "webhook_update", event.ChannelID)
+	if actorID != "" {
+		score := b.risk.AddRisk(event.GuildID, actorID, 20)
+		detail := fmt.Sprintf("user=<@%s> channel=%s score=%.1f", actorID, event.ChannelID, score)
+		b.audit.Log(ctx, audit.LevelWarn, event.GuildID, actorID, "webhook_guard", detail)
+		auditOnly := b.isAuditMode(b.guildSettings(ctx, event.GuildID))
+		b.applyRiskActions(ctx, event.GuildID, actorID, score, auditOnly, "webhook update")
+	}
+}
+
+func (b *Bot) addWarn(guildID, userID string) int {
+	if guildID == "" || userID == "" {
+		return 0
+	}
+	key := guildID + ":" + userID
+	b.modWarnsMu.Lock()
+	defer b.modWarnsMu.Unlock()
+	b.modWarns[key]++
+	return b.modWarns[key]
+}
+
+func (b *Bot) warnCount(guildID, userID string) int {
+	if guildID == "" || userID == "" {
+		return 0
+	}
+	key := guildID + ":" + userID
+	b.modWarnsMu.Lock()
+	defer b.modWarnsMu.Unlock()
+	return b.modWarns[key]
 }
 
 func (b *Bot) onGuildBanAdd(session *discordgo.Session, event *discordgo.GuildBanAdd) {

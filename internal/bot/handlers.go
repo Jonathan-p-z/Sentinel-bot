@@ -22,7 +22,7 @@ func (b *Bot) onInteractionCreate(session *discordgo.Session, interaction *disco
 	ctx := context.Background()
 	data := interaction.ApplicationCommandData()
 	switch data.Name {
-	case "status", "mode", "preset", "lockdown", "rules", "domain", "report", "language", "test", "logs", "risk", "whitelist", "nuke", "feedback":
+	case "status", "mode", "preset", "lockdown", "rules", "domain", "report", "language", "test", "logs", "risk", "whitelist", "nuke", "feedback", "raidguard", "webhookguard", "moderation":
 		b.handleSecurityCommand(ctx, session, interaction, data.Name, data.Options)
 	case "verify":
 		b.verify.HandleVerify(ctx)
@@ -98,10 +98,28 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 			return
 		}
 		action := options[0].StringValue()
-		if action != "reset" {
+		if action != "status" && action != "top" && action != "reset" {
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_risk_title"), b.t(lang, "error_unknown"), b.cfg.Notifications.EmbedColors.Error, nil), true)
 			return
 		}
+
+		if action == "top" {
+			top := b.risk.Top(interaction.GuildID, 10)
+			if len(top) == 0 {
+				b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_risk_title"), "No risky users right now.", b.cfg.Notifications.EmbedColors.Action, nil), true)
+				return
+			}
+			lines := make([]string, 0, len(top))
+			for _, entry := range top {
+				trustScore := b.trust.GetScore(interaction.GuildID, entry.UserID)
+				effective := b.risk.EffectiveScore(entry.Score, trustScore)
+				lines = append(lines, fmt.Sprintf("<@%s> risk=%.1f trust=%.1f effective=%.1f", entry.UserID, entry.Score, trustScore, effective))
+			}
+			fields := []*discordgo.MessageEmbedField{{Name: "Top risk users", Value: strings.Join(lines, "\n"), Inline: false}}
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_risk_title"), "Top users by current risk score.", b.cfg.Notifications.EmbedColors.Action, fields), true)
+			return
+		}
+
 		userID := ""
 		if len(options) > 1 && options[1].Type == discordgo.ApplicationCommandOptionUser {
 			userID = options[1].UserValue(session).ID
@@ -111,6 +129,31 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 		}
 		if userID == "" {
 			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_risk_title"), b.t(lang, "error_user_ctx"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+		if action == "status" {
+			riskScore := b.risk.GetScore(interaction.GuildID, userID)
+			trustScore := b.trust.GetScore(interaction.GuildID, userID)
+			effective := b.risk.EffectiveScore(riskScore, trustScore)
+			recommended := "none"
+			switch {
+			case effective >= b.cfg.Actions.Ban:
+				recommended = "ban"
+			case effective >= b.cfg.Actions.Timeout:
+				recommended = "timeout"
+			case effective >= b.cfg.Actions.Quarantine:
+				recommended = "quarantine"
+			case effective >= b.cfg.Actions.Delete:
+				recommended = "delete"
+			}
+			fields := []*discordgo.MessageEmbedField{
+				{Name: b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
+				{Name: "Risk", Value: fmt.Sprintf("%.1f", riskScore), Inline: true},
+				{Name: "Trust", Value: fmt.Sprintf("%.1f", trustScore), Inline: true},
+				{Name: "Effective", Value: fmt.Sprintf("%.1f", effective), Inline: true},
+				{Name: "Recommended", Value: recommended, Inline: true},
+			}
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_risk_title"), "Current risk analysis for this user.", b.cfg.Notifications.EmbedColors.Action, fields), true)
 			return
 		}
 		b.risk.Reset(interaction.GuildID, userID)
@@ -208,6 +251,12 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 		b.handleWhitelistCommand(ctx, session, interaction, settings, options)
 	case "nuke":
 		b.handleNukeCommand(ctx, session, interaction, settings, options)
+	case "raidguard":
+		b.handleRaidGuardCommand(ctx, session, interaction, settings, options)
+	case "webhookguard":
+		b.handleWebhookGuardCommand(ctx, session, interaction, settings, options)
+	case "moderation":
+		b.handleModerationCommand(ctx, session, interaction, settings, options)
 	case "feedback":
 		b.handleFeedbackCommand(ctx, session, interaction, settings, options)
 	default:
@@ -812,6 +861,286 @@ func (b *Bot) handleDomainList(ctx context.Context, session *discordgo.Session, 
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_domain_title"), b.t(lang, "security_domain_list"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 	default:
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_domain_title"), b.t(lang, "error_unknown"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+	}
+}
+
+func (b *Bot) handleRaidGuardCommand(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, settings storage.GuildSettings, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	if !b.memberCanModerate(session, interaction) {
+		b.respondEmbed(session, interaction, b.commandEmbed("Raid Guard", "You are not allowed to use this command.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	action := "status"
+	if len(options) > 0 {
+		action = options[0].StringValue()
+	}
+
+	switch action {
+	case "status":
+		state := b.playbook.IsLockdown(interaction.GuildID)
+		fields := []*discordgo.MessageEmbedField{
+			{Name: "Lockdown", Value: fmt.Sprintf("%t", state.Lockdown), Inline: true},
+			{Name: "Strict", Value: fmt.Sprintf("%t", state.Strict), Inline: true},
+			{Name: "Raid Threshold", Value: fmt.Sprintf("%d joins / %ds", settings.RaidJoins, settings.RaidWindowSeconds), Inline: true},
+		}
+		b.respondEmbed(session, interaction, b.commandEmbed("Raid Guard", "Current anti-raid status.", b.cfg.Notifications.EmbedColors.Action, fields), true)
+	case "lock":
+		triggered := b.enterLockdown(ctx, interaction.GuildID, "raidguard_manual")
+		if triggered {
+			actorID := interaction.Member.User.ID
+			b.audit.Log(ctx, audit.LevelWarn, interaction.GuildID, actorID, "raid_guard", fmt.Sprintf("user=<@%s> action=lockdown_on", actorID))
+			b.sendSecurityEmbed(ctx, interaction.GuildID, b.moderationLogEmbed("Raid Guard", actorID, "server", "lockdown", "manual lock", true))
+			b.respondEmbed(session, interaction, b.commandEmbed("Raid Guard", "Lockdown enabled.", b.cfg.Notifications.EmbedColors.Action, nil), true)
+			return
+		}
+		b.respondEmbed(session, interaction, b.commandEmbed("Raid Guard", "Lockdown is already active.", b.cfg.Notifications.EmbedColors.Warning, nil), true)
+	case "unlock":
+		b.restoreLockdown(ctx, interaction.GuildID, "raidguard_manual")
+		actorID := interaction.Member.User.ID
+		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, actorID, "raid_guard", fmt.Sprintf("user=<@%s> action=lockdown_off", actorID))
+		b.sendSecurityEmbed(ctx, interaction.GuildID, b.moderationLogEmbed("Raid Guard", actorID, "server", "unlock", "manual unlock", true))
+		b.respondEmbed(session, interaction, b.commandEmbed("Raid Guard", "Lockdown disabled.", b.cfg.Notifications.EmbedColors.Action, nil), true)
+	default:
+		b.respondEmbed(session, interaction, b.commandEmbed("Raid Guard", "Unknown action.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+	}
+}
+
+func (b *Bot) handleWebhookGuardCommand(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, settings storage.GuildSettings, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	if !b.memberCanModerate(session, interaction) {
+		b.respondEmbed(session, interaction, b.commandEmbed("Webhook Guard", "You are not allowed to use this command.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	action := "status"
+	threshold := 0
+	if len(options) > 0 {
+		action = options[0].StringValue()
+	}
+	if len(options) > 1 && options[1].Name == "threshold" {
+		threshold = int(options[1].IntValue())
+	}
+
+	switch action {
+	case "status":
+		fields := []*discordgo.MessageEmbedField{
+			{Name: "Nuke Enabled", Value: fmt.Sprintf("%t", settings.NukeEnabled), Inline: true},
+			{Name: "Webhook Threshold", Value: fmt.Sprintf("%d", settings.NukeWebhookUpdate), Inline: true},
+		}
+		b.respondEmbed(session, interaction, b.commandEmbed("Webhook Guard", "Current webhook protection settings.", b.cfg.Notifications.EmbedColors.Action, fields), true)
+	case "set":
+		if threshold <= 0 {
+			b.respondEmbed(session, interaction, b.commandEmbed("Webhook Guard", "Provide a threshold greater than 0.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+		settings.NukeEnabled = true
+		settings.NukeWebhookUpdate = threshold
+		if err := b.store.UpsertGuildSettings(ctx, settings); err != nil {
+			b.respondEmbed(session, interaction, b.commandEmbed("Webhook Guard", "Failed to update settings.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+		actorID := interaction.Member.User.ID
+		b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, actorID, "webhook_guard", fmt.Sprintf("user=<@%s> threshold=%d", actorID, threshold))
+		b.sendSecurityEmbed(ctx, interaction.GuildID, b.moderationLogEmbed("Webhook Guard", actorID, "server", "set_threshold", fmt.Sprintf("threshold=%d", threshold), true))
+		b.respondEmbed(session, interaction, b.commandEmbed("Webhook Guard", "Webhook threshold updated.", b.cfg.Notifications.EmbedColors.Action, []*discordgo.MessageEmbedField{{Name: "Threshold", Value: fmt.Sprintf("%d", threshold), Inline: true}}), true)
+	default:
+		b.respondEmbed(session, interaction, b.commandEmbed("Webhook Guard", "Unknown action.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+	}
+}
+
+func (b *Bot) handleModerationCommand(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, settings storage.GuildSettings, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	_ = settings
+	if !b.memberCanModerate(session, interaction) {
+		b.respondEmbed(session, interaction, b.commandEmbed("Moderation", "You are not allowed to use this command.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+	if len(options) == 0 {
+		b.respondEmbed(session, interaction, b.commandEmbed("Moderation", "Missing subcommand.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	sub := options[0]
+	action := sub.Name
+	var userID string
+	reason := "no reason provided"
+	minutes := 10
+
+	for _, opt := range sub.Options {
+		switch opt.Name {
+		case "user":
+			if user := opt.UserValue(session); user != nil {
+				userID = user.ID
+			}
+		case "reason":
+			value := strings.TrimSpace(opt.StringValue())
+			if value != "" {
+				reason = value
+			}
+		case "minutes":
+			if int(opt.IntValue()) > 0 {
+				minutes = int(opt.IntValue())
+			}
+		}
+	}
+
+	if userID == "" {
+		b.respondEmbed(session, interaction, b.commandEmbed("Moderation", "Missing target user.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+	if b.userIsAboveBot(interaction.GuildID, userID) {
+		b.respondEmbed(session, interaction, b.commandEmbed("Moderation", "Target user is above bot hierarchy.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	actorID := interaction.Member.User.ID
+	var err error
+	status := true
+
+	switch action {
+	case "risk":
+		riskScore := b.risk.GetScore(interaction.GuildID, userID)
+		trustScore := b.trust.GetScore(interaction.GuildID, userID)
+		effective := b.risk.EffectiveScore(riskScore, trustScore)
+		fields := []*discordgo.MessageEmbedField{
+			{Name: "User", Value: "<@" + userID + ">", Inline: true},
+			{Name: "Risk", Value: fmt.Sprintf("%.1f", riskScore), Inline: true},
+			{Name: "Trust", Value: fmt.Sprintf("%.1f", trustScore), Inline: true},
+			{Name: "Effective", Value: fmt.Sprintf("%.1f", effective), Inline: true},
+			{Name: "Warns", Value: fmt.Sprintf("%d", b.warnCount(interaction.GuildID, userID)), Inline: true},
+		}
+		b.respondEmbed(session, interaction, b.commandEmbed("Moderation", "Risk analysis for the user.", b.cfg.Notifications.EmbedColors.Action, fields), true)
+		return
+	case "warn":
+		warnCount := b.addWarn(interaction.GuildID, userID)
+		score := b.risk.AddRisk(interaction.GuildID, userID, 15)
+		b.audit.Log(ctx, audit.LevelWarn, interaction.GuildID, userID, "mod_warn", fmt.Sprintf("actor=<@%s> target=<@%s> warns=%d score=%.1f reason=%q", actorID, userID, warnCount, score, reason))
+
+		autoAction := "none"
+		if warnCount >= 3 {
+			autoAction = "ban"
+			err = b.session.GuildBanCreateWithReason(interaction.GuildID, userID, "Auto-ban after repeated warns", 0)
+		} else if warnCount >= 2 {
+			autoAction = "timeout"
+			until := time.Now().Add(30 * time.Minute)
+			err = b.session.GuildMemberTimeout(interaction.GuildID, userID, &until)
+		}
+
+		if err != nil {
+			status = false
+		}
+		fields := []*discordgo.MessageEmbedField{
+			{Name: "User", Value: "<@" + userID + ">", Inline: true},
+			{Name: "Warn Count", Value: fmt.Sprintf("%d", warnCount), Inline: true},
+			{Name: "Auto Action", Value: autoAction, Inline: true},
+		}
+		desc := "Warning recorded."
+		if err != nil {
+			desc = "Warning recorded, but automatic sanction failed: " + err.Error()
+		}
+		b.sendSecurityEmbed(ctx, interaction.GuildID, b.moderationLogEmbed("Moderation", actorID, userID, "warn", reason, status))
+		b.respondEmbed(session, interaction, b.commandEmbed("Moderation", desc, b.cfg.Notifications.EmbedColors.Action, fields), true)
+		return
+	case "mute":
+		until := time.Now().Add(time.Duration(minutes) * time.Minute)
+		err = b.session.GuildMemberTimeout(interaction.GuildID, userID, &until)
+	case "kick":
+		err = b.session.GuildMemberDelete(interaction.GuildID, userID)
+	case "ban":
+		err = b.session.GuildBanCreateWithReason(interaction.GuildID, userID, reason, 0)
+		if err == nil && b.store != nil {
+			_ = b.store.AddBannedUser(ctx, interaction.GuildID, userID, "moderation_ban")
+		}
+	default:
+		b.respondEmbed(session, interaction, b.commandEmbed("Moderation", "Unknown subcommand.", b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	if err != nil {
+		status = false
+	}
+	b.audit.Log(ctx, audit.LevelWarn, interaction.GuildID, userID, "mod_action", fmt.Sprintf("actor=<@%s> target=<@%s> action=%s reason=%q success=%t", actorID, userID, action, reason, status))
+	b.sendSecurityEmbed(ctx, interaction.GuildID, b.moderationLogEmbed("Moderation", actorID, userID, action, reason, status))
+
+	if !status {
+		b.respondEmbed(session, interaction, b.commandEmbed("Moderation", "Action failed: "+err.Error(), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+	b.respondEmbed(session, interaction, b.commandEmbed("Moderation", "Action completed successfully.", b.cfg.Notifications.EmbedColors.Action, nil), true)
+}
+
+func (b *Bot) memberCanModerate(session *discordgo.Session, interaction *discordgo.InteractionCreate) bool {
+	if interaction == nil || interaction.GuildID == "" || interaction.Member == nil || interaction.Member.User == nil {
+		return false
+	}
+	if session == nil {
+		return false
+	}
+
+	member := interaction.Member
+	if member.GuildID == "" {
+		member.GuildID = interaction.GuildID
+	}
+	guild, err := session.State.Guild(interaction.GuildID)
+	if err != nil || guild == nil {
+		guild, _ = session.Guild(interaction.GuildID)
+	}
+	if guild == nil {
+		return false
+	}
+	if guild.OwnerID == member.User.ID {
+		return true
+	}
+	if b.memberHasAdmin(guild, member) {
+		return true
+	}
+	if !b.userIsAboveBot(interaction.GuildID, member.User.ID) {
+		return false
+	}
+
+	perms := int64(0)
+	roleMap := make(map[string]*discordgo.Role, len(guild.Roles))
+	for _, role := range guild.Roles {
+		if role == nil {
+			continue
+		}
+		roleMap[role.ID] = role
+		if role.ID == guild.ID {
+			perms |= role.Permissions
+		}
+	}
+	for _, roleID := range member.Roles {
+		if role := roleMap[roleID]; role != nil {
+			perms |= role.Permissions
+		}
+	}
+	needed := int64(discordgo.PermissionKickMembers | discordgo.PermissionBanMembers | discordgo.PermissionModerateMembers | discordgo.PermissionManageGuild)
+	return perms&needed != 0
+}
+
+func (b *Bot) moderationLogEmbed(title, actorID, targetID, action, reason string, success bool) *discordgo.MessageEmbed {
+	status := "success"
+	color := b.cfg.Notifications.EmbedColors.Action
+	if !success {
+		status = "failed"
+		color = b.cfg.Notifications.EmbedColors.Error
+	}
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "Action", Value: action, Inline: true},
+		{Name: "Status", Value: status, Inline: true},
+		{Name: "Moderator", Value: "<@" + actorID + ">", Inline: true},
+	}
+	if targetID != "" && targetID != "server" {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "Target", Value: "<@" + targetID + ">", Inline: true})
+	}
+	if reason != "" {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "Reason", Value: reason, Inline: false})
+	}
+
+	return &discordgo.MessageEmbed{
+		Title:       title,
+		Description: "Moderation log event",
+		Color:       color,
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Fields:      fields,
 	}
 }
 

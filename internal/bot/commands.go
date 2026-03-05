@@ -352,14 +352,16 @@ func (b *Bot) registerCommands() error {
 				{
 					Type:        discordgo.ApplicationCommandOptionString,
 					Name:        "action",
-					Description: "reset",
+					Description: "status, top, reset",
 					DescriptionLocalizations: map[discordgo.Locale]string{
-						discordgo.French:    "reset",
-						discordgo.EnglishUS: "reset",
-						discordgo.SpanishES: "reset",
+						discordgo.French:    "status, top, reset",
+						discordgo.EnglishUS: "status, top, reset",
+						discordgo.SpanishES: "status, top, reset",
 					},
 					Required: true,
 					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "status", Value: "status"},
+						{Name: "top", Value: "top"},
 						{Name: "reset", Value: "reset"},
 					},
 				},
@@ -373,6 +375,126 @@ func (b *Bot) registerCommands() error {
 						discordgo.SpanishES: "usuario objetivo",
 					},
 					Required: false,
+				},
+			},
+		},
+		{
+			Name:        "raidguard",
+			Description: "Manage anti-raid controls",
+			DescriptionLocalizations: &map[discordgo.Locale]string{
+				discordgo.French:    "Gerer les controles anti-raid",
+				discordgo.EnglishUS: "Manage anti-raid controls",
+				discordgo.SpanishES: "Gestionar controles anti-raid",
+			},
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "action",
+					Description: "status, lock, unlock",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "status, lock, unlock",
+						discordgo.EnglishUS: "status, lock, unlock",
+						discordgo.SpanishES: "status, lock, unlock",
+					},
+					Required: true,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "status", Value: "status"},
+						{Name: "lock", Value: "lock"},
+						{Name: "unlock", Value: "unlock"},
+					},
+				},
+			},
+		},
+		{
+			Name:        "webhookguard",
+			Description: "Protect against webhook abuse",
+			DescriptionLocalizations: &map[discordgo.Locale]string{
+				discordgo.French:    "Proteger contre les abus de webhook",
+				discordgo.EnglishUS: "Protect against webhook abuse",
+				discordgo.SpanishES: "Proteger contra abusos de webhook",
+			},
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "action",
+					Description: "status or set",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "status ou set",
+						discordgo.EnglishUS: "status or set",
+						discordgo.SpanishES: "status o set",
+					},
+					Required: true,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "status", Value: "status"},
+						{Name: "set", Value: "set"},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "threshold",
+					Description: "webhook update threshold",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "seuil de mise a jour webhook",
+						discordgo.EnglishUS: "webhook update threshold",
+						discordgo.SpanishES: "umbral de actualizacion webhook",
+					},
+					Required: false,
+				},
+			},
+		},
+		{
+			Name:        "moderation",
+			Description: "Moderation actions",
+			DescriptionLocalizations: &map[discordgo.Locale]string{
+				discordgo.French:    "Actions de moderation",
+				discordgo.EnglishUS: "Moderation actions",
+				discordgo.SpanishES: "Acciones de moderacion",
+			},
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "warn",
+					Description: "warn a user",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: "target user", Required: true},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "reason", Description: "warn reason", Required: false},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "mute",
+					Description: "timeout a user",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: "target user", Required: true},
+						{Type: discordgo.ApplicationCommandOptionInteger, Name: "minutes", Description: "timeout minutes", Required: false},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "reason", Description: "mute reason", Required: false},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "kick",
+					Description: "kick a user",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: "target user", Required: true},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "reason", Description: "kick reason", Required: false},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "ban",
+					Description: "ban a user",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: "target user", Required: true},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "reason", Description: "ban reason", Required: false},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "risk",
+					Description: "inspect risk for a user",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: "target user", Required: true},
+					},
 				},
 			},
 		},
