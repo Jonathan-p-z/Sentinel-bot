@@ -159,6 +159,7 @@ func (b *Bot) Start() error {
 	b.session.AddHandler(b.onRoleUpdate)
 	b.session.AddHandler(b.onWebhooksUpdate)
 	b.session.AddHandler(b.onGuildBanAdd)
+	b.session.AddHandler(b.onGuildBanRemove)
 	b.session.AddHandler(b.onGuildUpdate)
 	b.session.AddHandler(b.onInteractionCreate)
 
@@ -263,9 +264,13 @@ func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.Guil
 	if event.Member != nil && event.Member.User != nil {
 		userID := event.Member.User.ID
 		if b.store != nil {
-			if banned, err := b.store.IsBannedUser(ctx, event.GuildID, userID); err == nil && banned {
-				_ = b.session.GuildBanCreateWithReason(event.GuildID, userID, "Sentinel Adaptive persistent ban", 0)
-				b.audit.Log(ctx, audit.LevelWarn, event.GuildID, userID, "persistent_ban_reapply", fmt.Sprintf("user=<@%s> reason=persistent_ban rejoin_blocked=true", userID))
+			if banReason, banned, err := b.store.GetBannedUserReason(ctx, event.GuildID, userID); err == nil && banned {
+				reapplyReason := fmt.Sprintf("Sentinel persistent ban reapply: %s", banReason)
+				if len(reapplyReason) > 512 {
+					reapplyReason = reapplyReason[:512]
+				}
+				_ = b.session.GuildBanCreateWithReason(event.GuildID, userID, reapplyReason, 0)
+				b.audit.Log(ctx, audit.LevelWarn, event.GuildID, userID, "persistent_ban_reapply", fmt.Sprintf("user=<@%s> ban_reason=%q rejoin_blocked=true", userID, banReason))
 				return
 			}
 		}
@@ -380,6 +385,27 @@ func (b *Bot) onGuildBanAdd(session *discordgo.Session, event *discordgo.GuildBa
 	}
 	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionMemberBanAdd, event.User.ID)
 	b.handleNukeAction(ctx, event.GuildID, actorID, "ban_add", event.User.ID)
+}
+
+func (b *Bot) onGuildBanRemove(session *discordgo.Session, event *discordgo.GuildBanRemove) {
+	if event.GuildID == "" || event.User == nil {
+		return
+	}
+	_ = session
+
+	ctx := context.Background()
+	if b.store != nil {
+		if err := b.store.RemoveBannedUser(ctx, event.GuildID, event.User.ID); err != nil {
+			b.audit.Log(ctx, audit.LevelWarn, event.GuildID, event.User.ID, "persistent_ban_remove_failed", fmt.Sprintf("user=<@%s> error=%q", event.User.ID, err.Error()))
+		}
+	}
+
+	resetScore := b.cfg.Risk.MaxScore * 0.5
+	if resetScore <= 0 {
+		resetScore = 50
+	}
+	newScore := b.risk.SetScore(event.GuildID, event.User.ID, resetScore)
+	b.audit.Log(ctx, audit.LevelInfo, event.GuildID, event.User.ID, "unban_risk_reset", fmt.Sprintf("user=<@%s> risk_score=%.1f reset_percent=50", event.User.ID, newScore))
 }
 
 func (b *Bot) onGuildUpdate(session *discordgo.Session, event *discordgo.GuildUpdate) {

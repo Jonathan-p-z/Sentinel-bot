@@ -350,3 +350,32 @@ func (s *Store) IsBannedUser(ctx context.Context, guildID, userID string) (bool,
 	}
 	return found == 1, nil
 }
+
+func (s *Store) GetBannedUserReason(ctx context.Context, guildID, userID string) (string, bool, error) {
+	if guildID == "" || userID == "" {
+		return "", false, nil
+	}
+
+	row := s.db.QueryRowContext(ctx, `SELECT reason FROM banned_users WHERE guild_id = $1 AND user_id = $2 LIMIT 1`, guildID, userID)
+	var reason string
+	if err := row.Scan(&reason); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+
+	if strings.TrimSpace(reason) == "" {
+		reason = "unspecified"
+	}
+
+	return reason, true, nil
+}
+
+func (s *Store) RemoveBannedUser(ctx context.Context, guildID, userID string) error {
+	if guildID == "" || userID == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM banned_users WHERE guild_id = $1 AND user_id = $2`, guildID, userID)
+	return err
+}

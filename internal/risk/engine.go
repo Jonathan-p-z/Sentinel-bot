@@ -101,6 +101,29 @@ func (e *Engine) Reset(guildID, userID string) {
 	delete(e.entries, key)
 }
 
+func (e *Engine) SetScore(guildID, userID string, score float64) float64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	key := guildID + ":" + userID
+	now := e.clock.Now()
+
+	if score < 0 {
+		score = 0
+	}
+
+	item := e.entries[key]
+	if item == nil {
+		item = &entry{score: 0, lastUpdate: now}
+		e.entries[key] = item
+	}
+
+	item.score = e.cap(score)
+	item.lastUpdate = now
+
+	return item.score
+}
+
 func (e *Engine) decay(score float64, lastUpdate, now time.Time) float64 {
 	minutes := now.Sub(lastUpdate).Minutes()
 	if minutes <= 0 {

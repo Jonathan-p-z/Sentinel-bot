@@ -47,3 +47,28 @@ func TestRiskIsCapped(t *testing.T) {
 		t.Fatalf("expected capped score 200 after additional risk, got %f", score)
 	}
 }
+
+func TestSetScore(t *testing.T) {
+	rCfg := config.RiskConfig{DecayPerMinute: 0, TTLMinutes: 60, TrustWeight: 0.5, MaxScore: 200}
+	engine := NewEngine(rCfg)
+
+	score := engine.SetScore("g1", "u1", 100)
+	if score != 100 {
+		t.Fatalf("expected score 100, got %f", score)
+	}
+
+	score = engine.GetScore("g1", "u1")
+	if score != 100 {
+		t.Fatalf("expected persisted score 100, got %f", score)
+	}
+
+	score = engine.SetScore("g1", "u1", 999)
+	if score != 200 {
+		t.Fatalf("expected capped score 200, got %f", score)
+	}
+
+	score = engine.SetScore("g1", "u1", -10)
+	if score != 0 {
+		t.Fatalf("expected floor score 0, got %f", score)
+	}
+}
