@@ -121,7 +121,6 @@ var blockedKeywords = []string{
 }
 
 func init() {
-	// Keep both original and uppercase variants in the keyword list.
 	expanded := make([]string, 0, len(blockedKeywords)*2)
 	seen := make(map[string]struct{}, len(blockedKeywords)*2)
 

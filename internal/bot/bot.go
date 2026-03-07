@@ -28,35 +28,37 @@ import (
 )
 
 type Bot struct {
-	cfg            config.Config
-	logger         *zap.Logger
-	store          *storage.Store
-	risk           *risk.Engine
-	trust          *trust.Engine
-	playbook       *playbook.Engine
-	audit          *audit.Logger
-	analytics      *analytics.Service
-	session        *discordgo.Session
-	antispam       *antispam.Module
-	antihate       *antihate.Module
-	antiraid       *antiraid.Module
-	antiphish      *antiphishing.Module
-	antinuke       *antinuke.Module
-	antinukeExempt *antinuke.Module
-	behavior       *behavior.Module
-	verify         *verification.Module
-	auditAgg       map[string]*auditAggregate
-	auditAggMu     sync.Mutex
-	warnAgg        map[string]*warningAggregate
-	warnAggMu      sync.Mutex
-	detectAgg      map[string]*detectionAggregate
-	detectAggMu    sync.Mutex
-	riskActionAgg  map[string]*riskActionAggregate
-	riskActionMu   sync.Mutex
-	modWarns       map[string]int
-	modWarnsMu     sync.Mutex
-	lockdownMu     sync.Mutex
-	lockdownMap    map[string]*lockdownSnapshot
+	cfg             config.Config
+	logger          *zap.Logger
+	store           *storage.Store
+	risk            *risk.Engine
+	trust           *trust.Engine
+	playbook        *playbook.Engine
+	audit           *audit.Logger
+	analytics       *analytics.Service
+	session         *discordgo.Session
+	antispam        *antispam.Module
+	antihate        *antihate.Module
+	antiraid        *antiraid.Module
+	antiphish       *antiphishing.Module
+	antinuke        *antinuke.Module
+	antinukeExempt  *antinuke.Module
+	behavior        *behavior.Module
+	verify          *verification.Module
+	auditAgg        map[string]*auditAggregate
+	auditAggMu      sync.Mutex
+	warnAgg         map[string]*warningAggregate
+	warnAggMu       sync.Mutex
+	detectAgg       map[string]*detectionAggregate
+	detectAggMu     sync.Mutex
+	riskActionAgg   map[string]*riskActionAggregate
+	riskActionMu    sync.Mutex
+	modWarns        map[string]int
+	modWarnsMu      sync.Mutex
+	antiHateWarns   map[string]int
+	antiHateWarnsMu sync.Mutex
+	lockdownMu      sync.Mutex
+	lockdownMap     map[string]*lockdownSnapshot
 }
 
 type auditAggregate struct {
@@ -124,6 +126,7 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 		detectAgg:     make(map[string]*detectionAggregate),
 		riskActionAgg: make(map[string]*riskActionAggregate),
 		modWarns:      make(map[string]int),
+		antiHateWarns: make(map[string]int),
 		lockdownMap:   make(map[string]*lockdownSnapshot),
 	}
 
@@ -220,7 +223,7 @@ func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.Message
 	}
 
 	if score, flagged, detail := b.antihate.HandleMessage(ctx, session, msg, msg.GuildID, auditOnly); flagged {
-		b.applyRiskActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly, detail)
+		b.applyAntiHateActions(ctx, msg.GuildID, msg.Author.ID, score, auditOnly, detail)
 		return
 	}
 
@@ -378,6 +381,78 @@ func (b *Bot) warnCount(guildID, userID string) int {
 	b.modWarnsMu.Lock()
 	defer b.modWarnsMu.Unlock()
 	return b.modWarns[key]
+}
+
+func (b *Bot) addAntiHateWarn(guildID, userID string) int {
+	if guildID == "" || userID == "" {
+		return 0
+	}
+	key := guildID + ":" + userID
+	b.antiHateWarnsMu.Lock()
+	defer b.antiHateWarnsMu.Unlock()
+	b.antiHateWarns[key]++
+	return b.antiHateWarns[key]
+}
+
+type antiHateSanction struct {
+	action         string
+	timeoutMinutes int
+	strike         int
+}
+
+func antiHateSanctionForStrike(strike int) antiHateSanction {
+	timeoutSteps := []int{5, 15, 30, 60}
+	if strike <= 1 {
+		return antiHateSanction{action: "warn", strike: strike}
+	}
+	idx := strike - 2
+	if idx >= 0 && idx < len(timeoutSteps) {
+		return antiHateSanction{action: "timeout", timeoutMinutes: timeoutSteps[idx], strike: strike}
+	}
+	return antiHateSanction{action: "ban", strike: strike}
+}
+
+func antiHateProgressText(lang string, strike int) string {
+	if strike <= 0 {
+		strike = 1
+	}
+
+	remainingTimeouts := 5 - strike
+	remainingChances := 6 - strike
+	if remainingTimeouts < 0 {
+		remainingTimeouts = 0
+	}
+	if remainingChances < 0 {
+		remainingChances = 0
+	}
+
+	if lang == "fr" {
+		switch {
+		case remainingChances == 0:
+			return fmt.Sprintf("Infraction %d: ban definitif applique.", strike)
+		case remainingTimeouts > 1:
+			return fmt.Sprintf("Infraction %d: il te reste %d timeouts avant le ban definitif.", strike, remainingTimeouts)
+		case remainingTimeouts == 1:
+			return fmt.Sprintf("Infraction %d: il te reste 1 timeout avant le ban definitif.", strike)
+		case remainingChances == 1:
+			return fmt.Sprintf("Infraction %d: il te reste 1 seule chance avant le ban definitif.", strike)
+		default:
+			return fmt.Sprintf("Infraction %d: prochaine infraction = ban definitif.", strike)
+		}
+	}
+
+	switch {
+	case remainingChances == 0:
+		return fmt.Sprintf("Strike %d: permanent ban applied.", strike)
+	case remainingTimeouts > 1:
+		return fmt.Sprintf("Strike %d: %d timeouts remain before a permanent ban.", strike, remainingTimeouts)
+	case remainingTimeouts == 1:
+		return fmt.Sprintf("Strike %d: 1 timeout remains before a permanent ban.", strike)
+	case remainingChances == 1:
+		return fmt.Sprintf("Strike %d: you have 1 last chance before a permanent ban.", strike)
+	default:
+		return fmt.Sprintf("Strike %d: next offense = permanent ban.", strike)
+	}
 }
 
 func (b *Bot) onGuildBanAdd(session *discordgo.Session, event *discordgo.GuildBanAdd) {
@@ -926,6 +1001,71 @@ func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, scor
 	}
 }
 
+func (b *Bot) applyAntiHateActions(ctx context.Context, guildID, userID string, score float64, auditOnly bool, triggerDetail string) {
+	if b.userIsAboveBot(guildID, userID) {
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "risk_ignored", fmt.Sprintf("user=<@%s> reason=target_above_bot_hierarchy", userID))
+		return
+	}
+
+	settings := b.guildSettings(ctx, guildID)
+	lang := settings.Language
+	if lang == "" {
+		lang = b.cfg.DefaultLanguage
+	}
+
+	strike := b.addAntiHateWarn(guildID, userID)
+	sanction := antiHateSanctionForStrike(strike)
+	trustScore := b.trust.GetScore(guildID, userID)
+	effective := b.risk.EffectiveScore(score, trustScore)
+	mode := settings.Mode
+	if mode == "" {
+		mode = b.cfg.Mode
+	}
+
+	reason := fmt.Sprintf("action=%s strike=%d effective=%.1f risk=%.1f trust=%.1f mode=%s", sanction.action, strike, effective, score, trustScore, mode)
+	if sanction.timeoutMinutes > 0 {
+		reason += fmt.Sprintf(" duration_minutes=%d", sanction.timeoutMinutes)
+	}
+	if triggerDetail != "" {
+		reason += " trigger=" + triggerDetail
+	}
+
+	level := audit.LevelWarn
+	if sanction.action == "ban" {
+		level = audit.LevelCrit
+	}
+
+	b.audit.Log(ctx, level, guildID, userID, "anti_hate_enforcement", reason)
+	b.sendSecurityEmbed(ctx, guildID, b.buildActionEmbed(lang, userID, sanction.action, score, trustScore, effective, auditOnly))
+	b.sendChannelWarning(ctx, guildID, userID, sanction.action, score, trustScore, effective, auditOnly, b.antiHateWarningExtraField(lang, strike))
+	b.warnUser(userID, b.buildAntiHateUserWarningEmbed(lang, sanction.action, score, trustScore, effective, auditOnly, strike))
+
+	if auditOnly {
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "audit_mode", fmt.Sprintf("user=<@%s> action=%s simulated=true source=anti_hate", userID, sanction.action))
+		return
+	}
+
+	if sanction.action == "warn" {
+		return
+	}
+
+	if !b.cfg.Actions.Enabled {
+		b.audit.Log(ctx, audit.LevelInfo, guildID, userID, "enforcement_disabled", fmt.Sprintf("user=<@%s> action=%s source=anti_hate reason=actions_disabled", userID, sanction.action))
+		return
+	}
+
+	switch sanction.action {
+	case "timeout":
+		until := time.Now().Add(time.Duration(sanction.timeoutMinutes) * time.Minute)
+		if err := b.session.GuildMemberTimeout(guildID, userID, &until); err != nil {
+			b.audit.Log(ctx, audit.LevelWarn, guildID, userID, "action_failed", fmt.Sprintf("user=<@%s> action=timeout source=anti_hate duration_minutes=%d error=%q", userID, sanction.timeoutMinutes, err.Error()))
+			b.sendSecurityEmbed(ctx, guildID, b.buildErrorEmbed(lang, userID, b.t(lang, "action_timeout_failed"), err))
+		}
+	case "ban":
+		b.banAndStore(ctx, guildID, userID, "anti_hate_repeat_offender")
+	}
+}
+
 func (b *Bot) sendSecurityEmbed(ctx context.Context, guildID string, embed *discordgo.MessageEmbed) {
 	_ = ctx
 	settings := b.guildSettings(ctx, guildID)
@@ -950,7 +1090,7 @@ func (b *Bot) warnUser(userID string, embed *discordgo.MessageEmbed) {
 	_, _ = b.session.ChannelMessageSendEmbed(channel.ID, embed)
 }
 
-func (b *Bot) sendChannelWarning(ctx context.Context, guildID, userID, action string, riskScore, trustScore, effective float64, auditOnly bool) {
+func (b *Bot) sendChannelWarning(ctx context.Context, guildID, userID, action string, riskScore, trustScore, effective float64, auditOnly bool, extraFields ...*discordgo.MessageEmbedField) {
 	if !b.cfg.Notifications.ChannelWarnEnabled {
 		return
 	}
@@ -981,7 +1121,7 @@ func (b *Bot) sendChannelWarning(ctx context.Context, guildID, userID, action st
 		count := agg.count
 		messageID := agg.messageID
 		b.warnAggMu.Unlock()
-		embed := b.buildChannelWarningEmbed(lang, userID, action, riskScore, trustScore, effective, auditOnly, count)
+		embed := b.buildChannelWarningEmbed(lang, userID, action, riskScore, trustScore, effective, auditOnly, count, extraFields...)
 		if _, err := b.session.ChannelMessageEditEmbed(channelID, messageID, embed); err == nil {
 			return
 		}
@@ -991,7 +1131,7 @@ func (b *Bot) sendChannelWarning(ctx context.Context, guildID, userID, action st
 	}
 	b.warnAggMu.Unlock()
 
-	embed := b.buildChannelWarningEmbed(lang, userID, action, riskScore, trustScore, effective, auditOnly, 1)
+	embed := b.buildChannelWarningEmbed(lang, userID, action, riskScore, trustScore, effective, auditOnly, 1, extraFields...)
 	msg, err := b.session.ChannelMessageSendEmbed(channelID, embed)
 	if err != nil || msg == nil {
 		return
@@ -1086,7 +1226,13 @@ func (b *Bot) buildUserWarningEmbed(lang, action string, riskScore, trustScore, 
 	}
 }
 
-func (b *Bot) buildChannelWarningEmbed(lang, userID, action string, riskScore, trustScore, effective float64, auditOnly bool, count int) *discordgo.MessageEmbed {
+func (b *Bot) buildAntiHateUserWarningEmbed(lang, action string, riskScore, trustScore, effective float64, auditOnly bool, strike int) *discordgo.MessageEmbed {
+	embed := b.buildUserWarningEmbed(lang, action, riskScore, trustScore, effective, auditOnly)
+	embed.Fields = append(embed.Fields, b.antiHateWarningExtraField(lang, strike))
+	return embed
+}
+
+func (b *Bot) buildChannelWarningEmbed(lang, userID, action string, riskScore, trustScore, effective float64, auditOnly bool, count int, extraFields ...*discordgo.MessageEmbedField) *discordgo.MessageEmbed {
 	mode := "normal"
 	if auditOnly {
 		mode = "audit"
@@ -1114,6 +1260,7 @@ func (b *Bot) buildChannelWarningEmbed(lang, userID, action string, riskScore, t
 		&discordgo.MessageEmbedField{Name: b.t(lang, "field_trust"), Value: fmt.Sprintf("%.1f", trustScore), Inline: true},
 		&discordgo.MessageEmbedField{Name: b.t(lang, "field_effective"), Value: fmt.Sprintf("%.1f", effective), Inline: true},
 	)
+	fields = append(fields, extraFields...)
 
 	return &discordgo.MessageEmbed{
 		Title:       b.t(lang, "warning_title"),
@@ -1123,6 +1270,14 @@ func (b *Bot) buildChannelWarningEmbed(lang, userID, action string, riskScore, t
 		Footer:      b.embedFooter(lang),
 		Timestamp:   time.Now().Format(time.RFC3339),
 		Fields:      fields,
+	}
+}
+
+func (b *Bot) antiHateWarningExtraField(lang string, strike int) *discordgo.MessageEmbedField {
+	return &discordgo.MessageEmbedField{
+		Name:   b.t(lang, "field_ban_progress"),
+		Value:  antiHateProgressText(lang, strike),
+		Inline: false,
 	}
 }
 
@@ -1285,6 +1440,8 @@ func (b *Bot) auditEventLabel(lang, event string) string {
 		return b.t(lang, "event_anti_spam")
 	case "anti_hate":
 		return b.t(lang, "event_anti_hate")
+	case "anti_hate_enforcement":
+		return b.t(lang, "event_anti_hate_enforcement")
 	case "anti_raid":
 		return b.t(lang, "event_anti_raid")
 	case "risk_action":
@@ -1552,7 +1709,7 @@ func (b *Bot) severityLabel(lang, action string) string {
 		return b.t(lang, "severity_crit")
 	case "timeout", "quarantine":
 		return b.t(lang, "severity_warn")
-	case "delete":
+	case "warn", "delete":
 		return b.t(lang, "severity_info")
 	default:
 		return ""
@@ -1572,6 +1729,8 @@ func (b *Bot) actionLabel(lang, action string) string {
 		return b.t(lang, "action_ban")
 	case "timeout":
 		return b.t(lang, "action_timeout")
+	case "warn":
+		return b.t(lang, "action_warn")
 	case "quarantine":
 		return b.t(lang, "action_quarantine")
 	case "delete":

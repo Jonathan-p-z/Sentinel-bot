@@ -175,6 +175,8 @@ actions:
 ## Notes on Actions
 Delete, quarantine, timeout, and ban thresholds are configurable. Enforcement is gated by `ACTIONS_ENABLED`. When enabled, Sentinel can apply timeouts and bans, and add a quarantine role if `QUARANTINE_ROLE_ID` is set. Delete still requires message context and remains logged by default.
 
+Anti-hate uses a dedicated escalation ladder when a user repeatedly posts blocked terms: first detection = warning, then 5m, 15m, 30m, and 60m timeouts, followed by a permanent ban on the sixth offense.
+
 ## Notifications
 Warnings are sent as embeds to the security channel and by DM. Audit logs can be mirrored to the security channel. Use `CHANNEL_WARN_ENABLED`, `DM_WARN_ENABLED`, and `AUDIT_TO_CHANNEL` to toggle, and adjust colors using `EMBED_COLOR_ACTION`, `EMBED_COLOR_WARNING`, and `EMBED_COLOR_ERROR`.
 
