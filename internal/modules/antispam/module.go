@@ -99,6 +99,27 @@ func (m *Module) getWindow(key string) *utils.SlidingWindow {
 	return window
 }
 
+// Cleanup removes map entries whose last activity exceeds the window duration,
+// preventing unbounded memory growth on large servers.
+func (m *Module) Cleanup() {
+	now := time.Now()
+	window := time.Duration(m.config.SpamWindowSeconds) * time.Second
+	if window <= 0 {
+		window = 8 * time.Second
+	}
+	stale := 5 * window
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for key, w := range m.windows {
+		if now.Sub(w.LastAt()) > stale {
+			delete(m.windows, key)
+			delete(m.repeats, key)
+		}
+	}
+}
+
 func (m *Module) trackRepeat(key, message string, now time.Time) int {
 	normalized := normalizeMessage(message)
 	if normalized == "" {

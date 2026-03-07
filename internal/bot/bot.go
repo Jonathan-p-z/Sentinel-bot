@@ -28,37 +28,41 @@ import (
 )
 
 type Bot struct {
-	cfg             config.Config
-	logger          *zap.Logger
-	store           *storage.Store
-	risk            *risk.Engine
-	trust           *trust.Engine
-	playbook        *playbook.Engine
-	audit           *audit.Logger
-	analytics       *analytics.Service
-	session         *discordgo.Session
-	antispam        *antispam.Module
-	antihate        *antihate.Module
-	antiraid        *antiraid.Module
-	antiphish       *antiphishing.Module
-	antinuke        *antinuke.Module
-	antinukeExempt  *antinuke.Module
-	behavior        *behavior.Module
-	verify          *verification.Module
-	auditAgg        map[string]*auditAggregate
-	auditAggMu      sync.Mutex
-	warnAgg         map[string]*warningAggregate
-	warnAggMu       sync.Mutex
-	detectAgg       map[string]*detectionAggregate
-	detectAggMu     sync.Mutex
-	riskActionAgg   map[string]*riskActionAggregate
-	riskActionMu    sync.Mutex
-	modWarns        map[string]int
-	modWarnsMu      sync.Mutex
-	antiHateWarns   map[string]int
-	antiHateWarnsMu sync.Mutex
-	lockdownMu      sync.Mutex
-	lockdownMap     map[string]*lockdownSnapshot
+	cfg              config.Config
+	logger           *zap.Logger
+	store            *storage.Store
+	risk             *risk.Engine
+	trust            *trust.Engine
+	playbook         *playbook.Engine
+	audit            *audit.Logger
+	analytics        *analytics.Service
+	session          *discordgo.Session
+	antispam         *antispam.Module
+	antihate         *antihate.Module
+	antiraid         *antiraid.Module
+	antiphish        *antiphishing.Module
+	antinuke         *antinuke.Module
+	antinukeExempt   *antinuke.Module
+	behavior         *behavior.Module
+	verify           *verification.Module
+	rootCtx          context.Context
+	rootCancel       context.CancelFunc
+	auditAgg         map[string]*auditAggregate
+	auditAggMu       sync.Mutex
+	warnAgg          map[string]*warningAggregate
+	warnAggMu        sync.Mutex
+	detectAgg        map[string]*detectionAggregate
+	detectAggMu      sync.Mutex
+	riskActionAgg    map[string]*riskActionAggregate
+	riskActionMu     sync.Mutex
+	modWarns         map[string]int
+	modWarnsMu       sync.Mutex
+	antiHateWarns    map[string]int
+	antiHateWarnsMu  sync.Mutex
+	lockdownMu       sync.Mutex
+	lockdownMap      map[string]*lockdownSnapshot
+	whitelistCacheMu sync.Mutex
+	whitelistCache   map[string]*whitelistCacheEntry
 }
 
 type auditAggregate struct {
@@ -87,6 +91,12 @@ type riskActionAggregate struct {
 	lastAt time.Time
 }
 
+type whitelistCacheEntry struct {
+	users     []string
+	roles     []string
+	fetchedAt time.Time
+}
+
 type lockdownSnapshot struct {
 	channels map[string]channelSnapshot
 }
@@ -111,23 +121,28 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 		discordgo.IntentsMessageContent |
 		discordgo.IntentsGuildVoiceStates
 
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+
 	b := &Bot{
-		cfg:           cfg,
-		logger:        logger,
-		store:         store,
-		risk:          riskEngine,
-		trust:         trustEngine,
-		playbook:      playbookEngine,
-		audit:         auditLogger,
-		analytics:     analyticsEngine,
-		session:       session,
-		auditAgg:      make(map[string]*auditAggregate),
-		warnAgg:       make(map[string]*warningAggregate),
-		detectAgg:     make(map[string]*detectionAggregate),
-		riskActionAgg: make(map[string]*riskActionAggregate),
-		modWarns:      make(map[string]int),
-		antiHateWarns: make(map[string]int),
-		lockdownMap:   make(map[string]*lockdownSnapshot),
+		cfg:            cfg,
+		logger:         logger,
+		store:          store,
+		risk:           riskEngine,
+		trust:          trustEngine,
+		playbook:       playbookEngine,
+		audit:          auditLogger,
+		analytics:      analyticsEngine,
+		session:        session,
+		rootCtx:        rootCtx,
+		rootCancel:     rootCancel,
+		auditAgg:       make(map[string]*auditAggregate),
+		warnAgg:        make(map[string]*warningAggregate),
+		detectAgg:      make(map[string]*detectionAggregate),
+		riskActionAgg:  make(map[string]*riskActionAggregate),
+		modWarns:       make(map[string]int),
+		antiHateWarns:  make(map[string]int),
+		lockdownMap:    make(map[string]*lockdownSnapshot),
+		whitelistCache: make(map[string]*whitelistCacheEntry),
 	}
 
 	b.antispam = antispam.New(cfg.Thresholds, riskEngine, auditLogger)
@@ -175,12 +190,16 @@ func (b *Bot) Start() error {
 	}
 
 	b.startDailySummary()
+	b.startCleanup()
 
 	return nil
 }
 
 func (b *Bot) Close(ctx context.Context) {
 	_ = ctx
+	if b.rootCancel != nil {
+		b.rootCancel()
+	}
 	if b.session != nil {
 		_ = b.session.Close()
 	}
@@ -276,6 +295,11 @@ func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.Guil
 				reapplyReason := fmt.Sprintf("Sentinel persistent ban reapply: %s", banReason)
 				if len(reapplyReason) > 512 {
 					reapplyReason = reapplyReason[:512]
+				}
+				auditOnly := b.isAuditMode(b.guildSettings(ctx, event.GuildID))
+				if auditOnly {
+					b.audit.Log(ctx, audit.LevelInfo, event.GuildID, userID, "persistent_ban_skipped", fmt.Sprintf("user=<@%s> reason=%q audit_mode=true", userID, banReason))
+					return
 				}
 				_ = b.session.GuildBanCreateWithReason(event.GuildID, userID, reapplyReason, 0)
 				b.audit.Log(ctx, audit.LevelWarn, event.GuildID, userID, "persistent_ban_reapply", fmt.Sprintf("user=<@%s> ban_reason=%q rejoin_blocked=true", userID, banReason))
@@ -383,9 +407,18 @@ func (b *Bot) warnCount(guildID, userID string) int {
 	return b.modWarns[key]
 }
 
-func (b *Bot) addAntiHateWarn(guildID, userID string) int {
+func (b *Bot) addAntiHateWarn(ctx context.Context, guildID, userID string) int {
 	if guildID == "" || userID == "" {
 		return 0
+	}
+	if b.store != nil {
+		if count, err := b.store.IncrementUserStrike(ctx, guildID, userID, "anti_hate"); err == nil {
+			key := guildID + ":" + userID
+			b.antiHateWarnsMu.Lock()
+			b.antiHateWarns[key] = count
+			b.antiHateWarnsMu.Unlock()
+			return count
+		}
 	}
 	key := guildID + ":" + userID
 	b.antiHateWarnsMu.Lock()
@@ -513,6 +546,11 @@ func (b *Bot) handleNukeAction(ctx context.Context, guildID, actorID, action, ta
 		return
 	}
 	if actorID == "" {
+		b.logger.Warn("nuke actor resolution failed, detection skipped",
+			zap.String("guild_id", guildID),
+			zap.String("action", action),
+			zap.String("target_id", targetID),
+		)
 		return
 	}
 	if b.userIsAboveBot(guildID, actorID) {
@@ -686,8 +724,12 @@ func (b *Bot) enterLockdown(ctx context.Context, guildID, reason string) bool {
 		lockdownMinutes = 10
 	}
 	go func() {
-		time.Sleep(time.Duration(lockdownMinutes) * time.Minute)
-		b.restoreLockdown(context.Background(), guildID, reason)
+		select {
+		case <-time.After(time.Duration(lockdownMinutes) * time.Minute):
+			b.restoreLockdown(b.rootCtx, guildID, reason)
+		case <-b.rootCtx.Done():
+			return
+		}
 	}()
 	return true
 }
@@ -699,6 +741,8 @@ func (b *Bot) applyLockdown(ctx context.Context, guildID string) bool {
 		b.lockdownMu.Unlock()
 		return false
 	}
+
+	b.lockdownMap[guildID] = &lockdownSnapshot{channels: make(map[string]channelSnapshot)}
 	b.lockdownMu.Unlock()
 	channels, err := b.session.GuildChannels(guildID)
 	if err != nil {
@@ -799,19 +843,25 @@ func (b *Bot) isWhitelisted(ctx context.Context, guildID, userID string) bool {
 		return true
 	}
 
-	users, err := b.store.ListWhitelistUsers(ctx, guildID)
-	if err == nil {
-		for _, id := range users {
-			if id == userID {
-				return true
-			}
+	const whitelistCacheTTL = 30 * time.Second
+	b.whitelistCacheMu.Lock()
+	entry := b.whitelistCache[guildID]
+	if entry == nil || time.Since(entry.fetchedAt) > whitelistCacheTTL {
+		users, _ := b.store.ListWhitelistUsers(ctx, guildID)
+		roles, _ := b.store.ListWhitelistRoles(ctx, guildID)
+		entry = &whitelistCacheEntry{users: users, roles: roles, fetchedAt: time.Now()}
+		b.whitelistCache[guildID] = entry
+	}
+	users := entry.users
+	roles := entry.roles
+	b.whitelistCacheMu.Unlock()
+
+	for _, id := range users {
+		if id == userID {
+			return true
 		}
 	}
 	if member == nil {
-		return false
-	}
-	roles, err := b.store.ListWhitelistRoles(ctx, guildID)
-	if err != nil {
 		return false
 	}
 	roleSet := make(map[string]struct{}, len(roles))
@@ -824,6 +874,12 @@ func (b *Bot) isWhitelisted(ctx context.Context, guildID, userID string) bool {
 		}
 	}
 	return false
+}
+
+func (b *Bot) invalidateWhitelistCache(guildID string) {
+	b.whitelistCacheMu.Lock()
+	delete(b.whitelistCache, guildID)
+	b.whitelistCacheMu.Unlock()
 }
 
 func (b *Bot) memberForUser(guildID, userID string) *discordgo.Member {
@@ -1013,7 +1069,7 @@ func (b *Bot) applyAntiHateActions(ctx context.Context, guildID, userID string, 
 		lang = b.cfg.DefaultLanguage
 	}
 
-	strike := b.addAntiHateWarn(guildID, userID)
+	strike := b.addAntiHateWarn(ctx, guildID, userID)
 	sanction := antiHateSanctionForStrike(strike)
 	trustScore := b.trust.GetScore(guildID, userID)
 	effective := b.risk.EffectiveScore(score, trustScore)
@@ -1128,8 +1184,9 @@ func (b *Bot) sendChannelWarning(ctx context.Context, guildID, userID, action st
 		b.warnAggMu.Lock()
 		delete(b.warnAgg, key)
 		b.warnAggMu.Unlock()
+	} else {
+		b.warnAggMu.Unlock()
 	}
-	b.warnAggMu.Unlock()
 
 	embed := b.buildChannelWarningEmbed(lang, userID, action, riskScore, trustScore, effective, auditOnly, 1, extraFields...)
 	msg, err := b.session.ChannelMessageSendEmbed(channelID, embed)
@@ -1164,43 +1221,93 @@ func (b *Bot) shouldSuppressRiskAction(guildID, userID, action string, auditOnly
 	return false
 }
 
-func (b *Bot) buildActionEmbed(lang, userID, action string, riskScore, trustScore, effective float64, auditOnly bool) *discordgo.MessageEmbed {
-	mode := "normal"
-	if auditOnly {
-		mode = "audit"
+// actionIcon returns an emoji representing the action type.
+func (b *Bot) actionIcon(action string) string {
+	switch action {
+	case "ban":
+		return "🔨"
+	case "timeout":
+		return "⏱️"
+	case "quarantine":
+		return "🔒"
+	case "delete":
+		return "🗑️"
+	case "warn":
+		return "⚠️"
+	default:
+		return "🛡️"
 	}
+}
+
+// actionColor returns a color integer for a given action (red=ban, amber=timeout, yellow=warn).
+func (b *Bot) actionColor(action string) int {
+	switch action {
+	case "ban":
+		return 0xDC2626
+	case "timeout":
+		return 0xD97706
+	case "quarantine":
+		return 0x7C3AED
+	case "delete":
+		return 0xF97316
+	case "warn":
+		return 0xFBBF24
+	default:
+		return b.cfg.Notifications.EmbedColors.Action
+	}
+}
+
+// levelColor returns a color integer for an audit log level.
+func (b *Bot) levelColor(level string) int {
+	switch level {
+	case "crit":
+		return 0xDC2626
+	case "warn":
+		return 0xD97706
+	case "info":
+		return 0x3B82F6
+	default:
+		return b.cfg.Notifications.EmbedColors.Action
+	}
+}
+
+func (b *Bot) buildActionEmbed(lang, userID, action string, riskScore, trustScore, effective float64, auditOnly bool) *discordgo.MessageEmbed {
 	severity := b.severityLabel(lang, action)
 	if severity == "" {
 		severity = b.t(lang, "severity_info")
 	}
+	color := b.actionColor(action)
+	statusVal := b.t(lang, "status_applied")
+	if auditOnly {
+		statusVal = b.t(lang, "status_audit")
+		color = 0x6B7280
+	}
 
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "action_title"),
-		Description: b.t(lang, "action_desc"),
-		Color:       b.cfg.Notifications.EmbedColors.Action,
+		Title:       b.actionIcon(action) + "  " + b.t(lang, "action_title"),
+		Description: "> <@" + userID + "> — **" + b.actionLabel(lang, action) + "**",
+		Color:       color,
 		Author:      b.embedAuthor(lang),
 		Footer:      b.embedFooter(lang),
 		Timestamp:   time.Now().Format(time.RFC3339),
 		Fields: []*discordgo.MessageEmbedField{
-			{Name: b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
-			{Name: b.t(lang, "field_action"), Value: b.actionLabel(lang, action), Inline: true},
-			{Name: b.t(lang, "field_mode"), Value: b.modeLabel(lang, mode), Inline: true},
-			{Name: b.t(lang, "field_severity"), Value: severity, Inline: true},
-			{Name: b.t(lang, "field_risk"), Value: fmt.Sprintf("%.1f", riskScore), Inline: true},
-			{Name: b.t(lang, "field_trust"), Value: fmt.Sprintf("%.1f", trustScore), Inline: true},
-			{Name: b.t(lang, "field_effective"), Value: fmt.Sprintf("%.1f", effective), Inline: true},
+			{Name: "👤 " + b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
+			{Name: "⚡ " + b.t(lang, "field_action"), Value: b.actionLabel(lang, action), Inline: true},
+			{Name: "📊 " + b.t(lang, "field_severity"), Value: severity, Inline: true},
+			{Name: "🔺 " + b.t(lang, "field_risk"), Value: fmt.Sprintf("%.1f", riskScore), Inline: true},
+			{Name: "🛡️ " + b.t(lang, "field_trust"), Value: fmt.Sprintf("%.1f", trustScore), Inline: true},
+			{Name: "⚖️ " + b.t(lang, "field_effective"), Value: fmt.Sprintf("%.1f", effective), Inline: true},
+			{Name: "🔎 " + b.t(lang, "field_status"), Value: statusVal, Inline: false},
 		},
 	}
 }
 
 func (b *Bot) buildUserWarningEmbed(lang, action string, riskScore, trustScore, effective float64, auditOnly bool) *discordgo.MessageEmbed {
+	color := b.actionColor(action)
 	note := b.t(lang, "status_applied")
 	if auditOnly {
 		note = b.t(lang, "status_audit")
-	}
-	mode := "normal"
-	if auditOnly {
-		mode = "audit"
+		color = 0x6B7280
 	}
 	severity := b.severityLabel(lang, action)
 	if severity == "" {
@@ -1208,20 +1315,16 @@ func (b *Bot) buildUserWarningEmbed(lang, action string, riskScore, trustScore, 
 	}
 
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "warning_title"),
+		Title:       b.actionIcon(action) + "  " + b.t(lang, "warning_title"),
 		Description: b.t(lang, "warning_desc"),
-		Color:       b.cfg.Notifications.EmbedColors.Warning,
+		Color:       color,
 		Author:      b.embedAuthor(lang),
 		Footer:      b.embedFooter(lang),
 		Timestamp:   time.Now().Format(time.RFC3339),
 		Fields: []*discordgo.MessageEmbedField{
-			{Name: b.t(lang, "field_action"), Value: b.actionLabel(lang, action), Inline: true},
-			{Name: b.t(lang, "field_status"), Value: note, Inline: true},
-			{Name: b.t(lang, "field_mode"), Value: b.modeLabel(lang, mode), Inline: true},
-			{Name: b.t(lang, "field_severity"), Value: severity, Inline: true},
-			{Name: b.t(lang, "field_risk"), Value: fmt.Sprintf("%.1f", riskScore), Inline: true},
-			{Name: b.t(lang, "field_trust"), Value: fmt.Sprintf("%.1f", trustScore), Inline: true},
-			{Name: b.t(lang, "field_effective"), Value: fmt.Sprintf("%.1f", effective), Inline: true},
+			{Name: "⚡ " + b.t(lang, "field_action"), Value: b.actionLabel(lang, action), Inline: true},
+			{Name: "📊 " + b.t(lang, "field_severity"), Value: severity, Inline: true},
+			{Name: "🔎 " + b.t(lang, "field_status"), Value: note, Inline: true},
 		},
 	}
 }
@@ -1233,39 +1336,37 @@ func (b *Bot) buildAntiHateUserWarningEmbed(lang, action string, riskScore, trus
 }
 
 func (b *Bot) buildChannelWarningEmbed(lang, userID, action string, riskScore, trustScore, effective float64, auditOnly bool, count int, extraFields ...*discordgo.MessageEmbedField) *discordgo.MessageEmbed {
-	mode := "normal"
-	if auditOnly {
-		mode = "audit"
-	}
+	color := b.actionColor(action)
 	status := b.t(lang, "status_applied")
 	if auditOnly {
 		status = b.t(lang, "status_audit")
+		color = 0x6B7280
 	}
 	severity := b.severityLabel(lang, action)
 	if severity == "" {
 		severity = b.t(lang, "severity_info")
 	}
-	fields := []*discordgo.MessageEmbedField{
-		{Name: b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
-		{Name: b.t(lang, "field_action"), Value: b.actionLabel(lang, action), Inline: true},
-		{Name: b.t(lang, "field_mode"), Value: b.modeLabel(lang, mode), Inline: true},
-		{Name: b.t(lang, "field_status"), Value: status, Inline: true},
-		{Name: b.t(lang, "field_severity"), Value: severity, Inline: true},
-	}
+
+	title := b.actionIcon(action) + "  " + b.t(lang, "warning_title")
 	if count > 1 {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: b.t(lang, "field_count"), Value: fmt.Sprintf("%d", count), Inline: true})
+		title += fmt.Sprintf(" (×%d)", count)
 	}
-	fields = append(fields,
-		&discordgo.MessageEmbedField{Name: b.t(lang, "field_risk"), Value: fmt.Sprintf("%.1f", riskScore), Inline: true},
-		&discordgo.MessageEmbedField{Name: b.t(lang, "field_trust"), Value: fmt.Sprintf("%.1f", trustScore), Inline: true},
-		&discordgo.MessageEmbedField{Name: b.t(lang, "field_effective"), Value: fmt.Sprintf("%.1f", effective), Inline: true},
-	)
+
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "👤 " + b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
+		{Name: "⚡ " + b.t(lang, "field_action"), Value: b.actionLabel(lang, action), Inline: true},
+		{Name: "📊 " + b.t(lang, "field_severity"), Value: severity, Inline: true},
+		{Name: "🔺 " + b.t(lang, "field_risk"), Value: fmt.Sprintf("%.1f", riskScore), Inline: true},
+		{Name: "🛡️ " + b.t(lang, "field_trust"), Value: fmt.Sprintf("%.1f", trustScore), Inline: true},
+		{Name: "⚖️ " + b.t(lang, "field_effective"), Value: fmt.Sprintf("%.1f", effective), Inline: true},
+		{Name: "🔎 " + b.t(lang, "field_status"), Value: status, Inline: false},
+	}
 	fields = append(fields, extraFields...)
 
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "warning_title"),
-		Description: b.t(lang, "warning_desc_channel"),
-		Color:       b.cfg.Notifications.EmbedColors.Warning,
+		Title:       title,
+		Description: "> <@" + userID + "> — " + b.t(lang, "warning_desc_channel"),
+		Color:       color,
 		Author:      b.embedAuthor(lang),
 		Footer:      b.embedFooter(lang),
 		Timestamp:   time.Now().Format(time.RFC3339),
@@ -1275,7 +1376,7 @@ func (b *Bot) buildChannelWarningEmbed(lang, userID, action string, riskScore, t
 
 func (b *Bot) antiHateWarningExtraField(lang string, strike int) *discordgo.MessageEmbedField {
 	return &discordgo.MessageEmbedField{
-		Name:   b.t(lang, "field_ban_progress"),
+		Name:   "📊 " + b.t(lang, "field_ban_progress"),
 		Value:  antiHateProgressText(lang, strike),
 		Inline: false,
 	}
@@ -1339,23 +1440,27 @@ func (b *Bot) handlePhishingDetection(ctx context.Context, guildID, userID, deta
 }
 
 func (b *Bot) buildDetectionWarningEmbed(lang, userID, detail string, count, threshold int, auditOnly bool) *discordgo.MessageEmbed {
-	mode := "normal"
+	color := 0x7C3AED // purple for phishing
+	status := b.t(lang, "status_applied")
 	if auditOnly {
-		mode = "audit"
+		status = b.t(lang, "status_audit")
+		color = 0x6B7280
 	}
+
+	progress := fmt.Sprintf("%d / %d", count, threshold)
 	fields := []*discordgo.MessageEmbedField{
-		{Name: b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
-		{Name: b.t(lang, "field_mode"), Value: b.modeLabel(lang, mode), Inline: true},
-		{Name: b.t(lang, "field_count"), Value: fmt.Sprintf("%d/%d", count, threshold), Inline: true},
+		{Name: "👤 " + b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
+		{Name: "📈 " + b.t(lang, "field_count"), Value: progress, Inline: true},
+		{Name: "🔎 " + b.t(lang, "field_status"), Value: status, Inline: true},
 	}
 	if detail != "" {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: b.t(lang, "field_reason"), Value: detail, Inline: false})
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "🔗 " + b.t(lang, "field_reason"), Value: "`" + detail + "`", Inline: false})
 	}
 
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "warning_phishing_title"),
-		Description: b.t(lang, "warning_phishing_desc"),
-		Color:       b.cfg.Notifications.EmbedColors.Warning,
+		Title:       "🎣  " + b.t(lang, "warning_phishing_title"),
+		Description: "> <@" + userID + "> — " + b.t(lang, "warning_phishing_desc"),
+		Color:       color,
 		Author:      b.embedAuthor(lang),
 		Footer:      b.embedFooter(lang),
 		Timestamp:   time.Now().Format(time.RFC3339),
@@ -1388,20 +1493,34 @@ func (b *Bot) phishingBanDelta() float64 {
 }
 
 func (b *Bot) buildErrorEmbed(lang, userID, reason string, err error) *discordgo.MessageEmbed {
-	message := reason
+	detail := reason
 	if err != nil {
-		message = reason + ": " + err.Error()
+		detail = reason + "\n> `" + err.Error() + "`"
 	}
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "error_title"),
-		Description: message,
+		Title:       "❌  " + b.t(lang, "error_title"),
+		Description: detail,
 		Color:       b.cfg.Notifications.EmbedColors.Error,
 		Author:      b.embedAuthor(lang),
 		Footer:      b.embedFooter(lang),
 		Timestamp:   time.Now().Format(time.RFC3339),
 		Fields: []*discordgo.MessageEmbedField{
-			{Name: b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
+			{Name: "👤 " + b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true},
 		},
+	}
+}
+
+// levelIcon returns an emoji for an audit log level.
+func levelIcon(level string) string {
+	switch level {
+	case "crit":
+		return "🚨"
+	case "warn":
+		return "⚠️"
+	case "info":
+		return "ℹ️"
+	default:
+		return "📋"
 	}
 }
 
@@ -1412,19 +1531,23 @@ func (b *Bot) buildAuditEmbed(lang string, entry storage.AuditLog, count int) *d
 	}
 	eventLabel := b.auditEventLabel(lang, entry.Event)
 	formattedDetails := b.formatAuditDetails(lang, entry)
-	fields := []*discordgo.MessageEmbedField{
-		{Name: b.t(lang, "field_event"), Value: eventLabel, Inline: false},
-		{Name: b.t(lang, "audit_level"), Value: entry.Level, Inline: true},
-		{Name: b.t(lang, "field_user"), Value: userValue, Inline: true},
-	}
+
+	title := levelIcon(entry.Level) + "  " + b.t(lang, "audit_title")
 	if count > 1 {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: b.t(lang, "field_count"), Value: fmt.Sprintf("%d", count), Inline: true})
+		title += fmt.Sprintf(" (×%d)", count)
 	}
-	fields = append(fields, &discordgo.MessageEmbedField{Name: b.t(lang, "audit_details"), Value: formattedDetails, Inline: false})
+
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "📌 " + b.t(lang, "field_event"), Value: eventLabel, Inline: true},
+		{Name: "👤 " + b.t(lang, "field_user"), Value: userValue, Inline: true},
+		{Name: "🔖 " + b.t(lang, "audit_level"), Value: strings.ToUpper(entry.Level), Inline: true},
+	}
+	fields = append(fields, &discordgo.MessageEmbedField{Name: "📄 " + b.t(lang, "audit_details"), Value: formattedDetails, Inline: false})
+
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "audit_title"),
+		Title:       title,
 		Description: b.t(lang, "audit_desc"),
-		Color:       b.cfg.Notifications.EmbedColors.Action,
+		Color:       b.levelColor(entry.Level),
 		Author:      b.embedAuthor(lang),
 		Footer:      b.embedFooter(lang),
 		Timestamp:   entry.CreatedAt.Format(time.RFC3339),
@@ -1435,39 +1558,39 @@ func (b *Bot) buildAuditEmbed(lang string, entry storage.AuditLog, count int) *d
 func (b *Bot) auditEventLabel(lang, event string) string {
 	switch event {
 	case "anti_phishing":
-		return b.t(lang, "event_anti_phishing")
+		return "🎣 " + b.t(lang, "event_anti_phishing")
 	case "anti_spam":
-		return b.t(lang, "event_anti_spam")
+		return "💬 " + b.t(lang, "event_anti_spam")
 	case "anti_hate":
-		return b.t(lang, "event_anti_hate")
+		return "🚩 " + b.t(lang, "event_anti_hate")
 	case "anti_hate_enforcement":
-		return b.t(lang, "event_anti_hate_enforcement")
+		return "🔨 " + b.t(lang, "event_anti_hate_enforcement")
 	case "anti_raid":
-		return b.t(lang, "event_anti_raid")
+		return "🌊 " + b.t(lang, "event_anti_raid")
 	case "risk_action":
-		return b.t(lang, "event_risk_action")
+		return "⚡ " + b.t(lang, "event_risk_action")
 	case "enforcement_disabled":
-		return b.t(lang, "event_enforcement_disabled")
+		return "⏸️ " + b.t(lang, "event_enforcement_disabled")
 	case "action_failed":
-		return b.t(lang, "event_action_failed")
+		return "❌ " + b.t(lang, "event_action_failed")
 	case "action_skipped":
-		return b.t(lang, "event_action_skipped")
+		return "⏭️ " + b.t(lang, "event_action_skipped")
 	case "audit_mode":
-		return b.t(lang, "event_audit_mode")
+		return "🔍 " + b.t(lang, "event_audit_mode")
 	case "raid_lockdown":
-		return b.t(lang, "event_raid_lockdown")
+		return "🔒 " + b.t(lang, "event_raid_lockdown")
 	case "risk_reset":
-		return b.t(lang, "event_risk_reset")
+		return "🔄 " + b.t(lang, "event_risk_reset")
 	case "test":
-		return b.t(lang, "event_test")
+		return "🧪 " + b.t(lang, "event_test")
 	case "security":
-		return b.t(lang, "event_security")
+		return "🛡️ " + b.t(lang, "event_security")
 	case "anti_nuke":
-		return b.t(lang, "event_anti_nuke")
+		return "💣 " + b.t(lang, "event_anti_nuke")
 	case "nuke_timeout":
-		return b.t(lang, "event_nuke_timeout")
+		return "⏱️ " + b.t(lang, "event_nuke_timeout")
 	default:
-		return event
+		return "📋 " + event
 	}
 }
 
@@ -1593,6 +1716,22 @@ func (b *Bot) startDailySummary() {
 	}()
 }
 
+// startCleanup periodically removes stale entries from in-memory maps to bound memory usage.
+func (b *Bot) startCleanup() {
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				b.antispam.Cleanup()
+			case <-b.rootCtx.Done():
+				return
+			}
+		}
+	}()
+}
+
 func (b *Bot) sendDailySummary() {
 	if b.session == nil || b.session.State == nil {
 		return
@@ -1622,14 +1761,14 @@ func (b *Bot) buildDailySummaryEmbed(lang, guildID string) *discordgo.MessageEmb
 	}
 
 	fields := []*discordgo.MessageEmbedField{
-		{Name: b.t(lang, "field_risk_top"), Value: riskLines, Inline: false},
-		{Name: b.t(lang, "field_voice"), Value: voiceLines, Inline: false},
+		{Name: "🔺 " + b.t(lang, "field_risk_top"), Value: riskLines, Inline: false},
+		{Name: "🎙️ " + b.t(lang, "field_voice"), Value: voiceLines, Inline: false},
 	}
 
 	return &discordgo.MessageEmbed{
-		Title:       b.t(lang, "daily_summary_title"),
+		Title:       "📊  " + b.t(lang, "daily_summary_title"),
 		Description: b.t(lang, "daily_summary_desc"),
-		Color:       b.cfg.Notifications.EmbedColors.Action,
+		Color:       0x3B82F6,
 		Author:      b.embedAuthor(lang),
 		Footer:      b.embedFooter(lang),
 		Timestamp:   time.Now().Format(time.RFC3339),
@@ -1767,8 +1906,6 @@ func (b *Bot) guildSettings(ctx context.Context, guildID string) storage.GuildSe
 		NukeGuildUpdate:    b.cfg.Nuke.GuildUpdate,
 	}
 
-	// ✅ Suppression de l'ouverture d'une nouvelle connexion DB ici.
-	// On utilise directement le store déjà connecté à Postgres.
 	settings, err := b.store.GetGuildSettings(ctx, guildID, defaults)
 	if err != nil {
 		b.logger.Warn("guild settings fallback used", zap.Error(err))

@@ -60,7 +60,6 @@ var blockedKeywords = []string{
 	"pends toi",
 	"egorge",
 	"dechet humain",
-	"slp",
 	"bztmr",
 	"ngr",
 	"niga",
@@ -121,23 +120,17 @@ var blockedKeywords = []string{
 }
 
 func init() {
-	expanded := make([]string, 0, len(blockedKeywords)*2)
-	seen := make(map[string]struct{}, len(blockedKeywords)*2)
-
-	for _, keyword := range blockedKeywords {
-		if _, ok := seen[keyword]; !ok {
-			expanded = append(expanded, keyword)
-			seen[keyword] = struct{}{}
-		}
-
-		upper := strings.ToUpper(keyword)
-		if _, ok := seen[upper]; !ok {
-			expanded = append(expanded, upper)
-			seen[upper] = struct{}{}
+	// Deduplicate the keyword list. Uppercase variants are unnecessary because
+	// findBlockedKeyword always normalises input to lowercase before matching.
+	seen := make(map[string]struct{}, len(blockedKeywords))
+	deduped := make([]string, 0, len(blockedKeywords))
+	for _, kw := range blockedKeywords {
+		if _, ok := seen[kw]; !ok {
+			seen[kw] = struct{}{}
+			deduped = append(deduped, kw)
 		}
 	}
-
-	blockedKeywords = expanded
+	blockedKeywords = deduped
 }
 
 type Module struct {

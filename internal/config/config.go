@@ -190,7 +190,45 @@ func Load() (Config, error) {
 	cfg.RulePreset = normalizePreset(cfg.RulePreset)
 	applyPreset(&cfg)
 
+	if err := validateConfig(&cfg); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
+}
+
+func validateConfig(cfg *Config) error {
+	if cfg.Thresholds.SpamMessages <= 0 {
+		cfg.Thresholds.SpamMessages = DefaultConfig().Thresholds.SpamMessages
+	}
+	if cfg.Thresholds.SpamWindowSeconds <= 0 {
+		cfg.Thresholds.SpamWindowSeconds = DefaultConfig().Thresholds.SpamWindowSeconds
+	}
+	if cfg.Thresholds.RaidJoins <= 0 {
+		cfg.Thresholds.RaidJoins = DefaultConfig().Thresholds.RaidJoins
+	}
+	if cfg.Thresholds.RaidWindowSeconds <= 0 {
+		cfg.Thresholds.RaidWindowSeconds = DefaultConfig().Thresholds.RaidWindowSeconds
+	}
+	if cfg.Thresholds.PhishingRisk <= 0 {
+		cfg.Thresholds.PhishingRisk = DefaultConfig().Thresholds.PhishingRisk
+	}
+	if cfg.Thresholds.BurstLinks <= 0 {
+		cfg.Thresholds.BurstLinks = DefaultConfig().Thresholds.BurstLinks
+	}
+	if cfg.Thresholds.BurstWindowSeconds <= 0 {
+		cfg.Thresholds.BurstWindowSeconds = DefaultConfig().Thresholds.BurstWindowSeconds
+	}
+	if cfg.Actions.Delete < 0 || cfg.Actions.Quarantine < 0 || cfg.Actions.Timeout < 0 || cfg.Actions.Ban < 0 {
+		return errors.New("action thresholds cannot be negative")
+	}
+	if cfg.Actions.TimeoutMinutes <= 0 {
+		cfg.Actions.TimeoutMinutes = DefaultConfig().Actions.TimeoutMinutes
+	}
+	if cfg.Playbook.LockdownMinutes <= 0 {
+		cfg.Playbook.LockdownMinutes = DefaultConfig().Playbook.LockdownMinutes
+	}
+	return nil
 }
 
 func applyEnv(cfg *Config) {

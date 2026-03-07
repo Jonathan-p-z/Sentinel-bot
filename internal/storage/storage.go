@@ -78,6 +78,19 @@ func New(connStr string) (*Store, error) {
 		return nil, fmt.Errorf("impossible de créer banned_users: %w", err)
 	}
 
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS user_strikes (
+			guild_id    TEXT NOT NULL,
+			user_id     TEXT NOT NULL,
+			strike_type TEXT NOT NULL,
+			count       INTEGER NOT NULL DEFAULT 1,
+			updated_at  BIGINT NOT NULL,
+			PRIMARY KEY (guild_id, user_id, strike_type)
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("impossible de créer user_strikes: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -88,7 +101,53 @@ func (s *Store) Close() {
 }
 
 func (s *Store) Migrate() error {
-	fmt.Println("Migration skip: Structure gérée par PostgreSQL")
+	if s == nil || s.db == nil {
+		return nil
+	}
+	if _, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version TEXT PRIMARY KEY,
+			applied_at BIGINT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("failed to create schema_migrations: %w", err)
+	}
+
+	entries, err := migrations.ReadDir("migrations")
+	if err != nil {
+		return fmt.Errorf("failed to read migrations dir: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		version := entry.Name()
+
+		var applied int
+		row := s.db.QueryRow(`SELECT COUNT(1) FROM schema_migrations WHERE version = $1`, version)
+		_ = row.Scan(&applied)
+		if applied > 0 {
+			continue
+		}
+
+		data, err := migrations.ReadFile("migrations/" + version)
+		if err != nil {
+			return fmt.Errorf("failed to read migration %s: %w", version, err)
+		}
+
+		if _, err := s.db.Exec(string(data)); err != nil {
+			return fmt.Errorf("failed to apply migration %s: %w", version, err)
+		}
+
+		if _, err := s.db.Exec(
+			`INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)`,
+			version, time.Now().Unix(),
+		); err != nil {
+			return fmt.Errorf("failed to record migration %s: %w", version, err)
+		}
+	}
+
 	return nil
 }
 
@@ -378,4 +437,37 @@ func (s *Store) RemoveBannedUser(ctx context.Context, guildID, userID string) er
 	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM banned_users WHERE guild_id = $1 AND user_id = $2`, guildID, userID)
 	return err
+}
+
+// --- User Strikes ---
+
+// IncrementUserStrike atomically increments the strike counter for a user and returns the new count.
+func (s *Store) IncrementUserStrike(ctx context.Context, guildID, userID, strikeType string) (int, error) {
+	row := s.db.QueryRowContext(ctx, `
+		INSERT INTO user_strikes (guild_id, user_id, strike_type, count, updated_at)
+		VALUES ($1, $2, $3, 1, $4)
+		ON CONFLICT (guild_id, user_id, strike_type) DO UPDATE
+		SET count = user_strikes.count + 1, updated_at = EXCLUDED.updated_at
+		RETURNING count
+	`, guildID, userID, strikeType, time.Now().Unix())
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// GetUserStrike returns the current strike count for a user (0 if none).
+func (s *Store) GetUserStrike(ctx context.Context, guildID, userID, strikeType string) (int, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT count FROM user_strikes WHERE guild_id = $1 AND user_id = $2 AND strike_type = $3
+	`, guildID, userID, strikeType)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return count, nil
 }

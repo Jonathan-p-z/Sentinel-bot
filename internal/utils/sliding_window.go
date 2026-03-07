@@ -47,3 +47,13 @@ func (w *SlidingWindow) Count(now time.Time) int {
 	w.hits = w.hits[idx:]
 	return len(w.hits)
 }
+
+// LastAt returns the time of the last recorded hit, or zero if no hits exist.
+func (w *SlidingWindow) LastAt() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.hits) == 0 {
+		return time.Time{}
+	}
+	return w.hits[len(w.hits)-1]
+}

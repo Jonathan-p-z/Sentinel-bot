@@ -47,6 +47,19 @@ func (b *Bot) handleSecurityCommand(ctx context.Context, session *discordgo.Sess
 		lang = b.cfg.DefaultLanguage
 	}
 
+	// All security commands except "feedback" require the caller to be above the bot
+	// in the role hierarchy (moderator or higher).
+	if name != "feedback" {
+		if interaction.Member == nil || interaction.Member.User == nil {
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_title"), b.t(lang, "error_user_ctx"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+		if !b.userIsAboveBot(interaction.GuildID, interaction.Member.User.ID) {
+			b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_title"), b.t(lang, "error_permission"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+	}
+
 	switch name {
 	case "status":
 		state := b.playbook.IsLockdown(interaction.GuildID)
@@ -585,6 +598,7 @@ func (b *Bot) handleWhitelistCommand(ctx context.Context, session *discordgo.Ses
 		} else if action == "remove" {
 			_ = b.store.RemoveWhitelistUser(ctx, interaction.GuildID, userID)
 		}
+		b.invalidateWhitelistCache(interaction.GuildID)
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_user"), Value: "<@" + userID + ">", Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_whitelist_title"), b.t(lang, "security_whitelist_updated"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 		return
@@ -596,6 +610,7 @@ func (b *Bot) handleWhitelistCommand(ctx context.Context, session *discordgo.Ses
 		} else if action == "remove" {
 			_ = b.store.RemoveWhitelistRole(ctx, interaction.GuildID, roleID)
 		}
+		b.invalidateWhitelistCache(interaction.GuildID)
 		fields := []*discordgo.MessageEmbedField{{Name: b.t(lang, "field_role"), Value: "<@&" + roleID + ">", Inline: true}}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "security_whitelist_title"), b.t(lang, "security_whitelist_updated"), b.cfg.Notifications.EmbedColors.Action, fields), true)
 		return

@@ -69,8 +69,8 @@ func (e *Engine) AddRisk(guildID, userID string, delta float64) float64 {
 }
 
 func (e *Engine) GetScore(guildID, userID string) float64 {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
 	key := guildID + ":" + userID
 	item := e.entries[key]
@@ -80,14 +80,12 @@ func (e *Engine) GetScore(guildID, userID string) float64 {
 
 	now := e.clock.Now()
 	if e.isExpired(item.lastUpdate, now) {
-		delete(e.entries, key)
+		// Expired entry; will be cleaned up on the next write or Top() call.
 		return 0
 	}
 
-	item.score = e.decay(item.score, item.lastUpdate, now)
-	item.score = e.cap(item.score)
-	item.lastUpdate = now
-	return item.score
+	// Compute decayed score without mutating state — mutations happen in AddRisk.
+	return e.cap(e.decay(item.score, item.lastUpdate, now))
 }
 
 func (e *Engine) EffectiveScore(riskScore, trustScore float64) float64 {
