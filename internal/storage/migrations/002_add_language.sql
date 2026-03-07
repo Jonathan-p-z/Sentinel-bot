@@ -1,1 +1,1 @@
-ALTER TABLE guild_settings ADD COLUMN language TEXT DEFAULT 'fr';
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'fr';
