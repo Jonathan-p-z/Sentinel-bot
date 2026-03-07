@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     guild_id TEXT NOT NULL,
     user_id TEXT,
     level TEXT,
