@@ -546,7 +546,7 @@ func (b *Bot) handleNukeAction(ctx context.Context, guildID, actorID, action, ta
 		return
 	}
 	if actorID == "" {
-		b.logger.Warn("nuke actor resolution failed, detection skipped",
+		b.logger.Debug("nuke actor resolution failed, detection skipped",
 			zap.String("guild_id", guildID),
 			zap.String("action", action),
 			zap.String("target_id", targetID),
