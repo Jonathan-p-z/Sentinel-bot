@@ -210,10 +210,14 @@ func (b *Bot) onReady(session *discordgo.Session, event *discordgo.Ready) {
 }
 
 func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.MessageCreate) {
-	if msg.Author == nil || msg.Author.Bot {
+	if msg.Author == nil {
 		return
 	}
 	if msg.GuildID == "" {
+		return
+	}
+	// Ignore only Sentinel itself to avoid self-moderation loops.
+	if session.State != nil && session.State.User != nil && msg.Author.ID == session.State.User.ID {
 		return
 	}
 	if b.userIsAboveBot(msg.GuildID, msg.Author.ID) {
