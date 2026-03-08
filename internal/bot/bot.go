@@ -435,10 +435,7 @@ type antiHateSanction struct {
 
 func antiHateSanctionForStrike(strike int) antiHateSanction {
 	timeoutSteps := []int{5, 15, 30, 60}
-	if strike <= 1 {
-		return antiHateSanction{action: "warn", strike: strike}
-	}
-	idx := strike - 2
+	idx := strike - 1
 	if idx >= 0 && idx < len(timeoutSteps) {
 		return antiHateSanction{action: "timeout", timeoutMinutes: timeoutSteps[idx], strike: strike}
 	}
