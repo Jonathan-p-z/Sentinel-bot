@@ -1,0 +1,50 @@
+{{define "content"}}
+{{block "breadcrumb" .}}
+<a href="/app">Serveurs</a>
+<span class="sep">/</span>
+<a href="/app/guild?id={{.Guild.ID}}">{{.Guild.Name}}</a>
+<span class="sep">/</span>
+<span class="current">Modules</span>
+{{end}}
+
+<div class="page-header">
+  <div class="page-title">Modules de sécurité</div>
+  <div class="page-subtitle">Statut des modules actifs sur ce serveur.</div>
+</div>
+
+<div class="alert alert-info mb-6">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px">
+    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+  </svg>
+  La configuration des modules se fait via les commandes Discord (<code>/nuke</code>, <code>/rules</code>, <code>/mode</code>).
+  La gestion in-dashboard est disponible avec le plan <strong>Pro</strong>.
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px">
+  {{range .Modules}}
+  <div class="card" style="padding:16px 20px">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div style="width:36px;height:36px;border-radius:8px;{{if .Enabled}}background:var(--success-dim);border:1px solid rgba(16,185,129,.2);color:var(--success){{else}}background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted){{end}};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          {{if .Enabled}}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          {{else}}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          {{end}}
+        </div>
+        <div>
+          <div style="font-weight:600;color:var(--text);font-size:.95rem;margin-bottom:2px">
+            {{.Name}}
+            {{if not .Enabled}}<span class="badge badge-muted" style="margin-left:6px">Indisponible</span>{{end}}
+          </div>
+          <div class="text-secondary text-sm">{{.Description}}</div>
+        </div>
+      </div>
+      <span class="badge {{if .Enabled}}badge-success{{else}}badge-muted{{end}}">
+        {{if .Enabled}}Actif{{else}}Inactif{{end}}
+      </span>
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}

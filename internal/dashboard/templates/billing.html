@@ -1,0 +1,89 @@
+{{define "content"}}
+{{block "breadcrumb" .}}
+<span class="current">Abonnement</span>
+{{end}}
+
+<div class="page-header">
+  <div class="page-title">Abonnement & Facturation</div>
+  <div class="page-subtitle">Gérez votre plan et vos serveurs protégés.</div>
+</div>
+
+<div class="alert alert-info mb-6">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px">
+    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+  </svg>
+  Le paiement Stripe sera disponible prochainement. Pendant la bêta, tous les comptes ont accès aux fonctionnalités Pro.
+</div>
+
+{{if .Subscriptions}}
+<div class="card mb-6">
+  <div class="card-header">
+    <span class="card-title">Abonnements actifs</span>
+  </div>
+  <div class="table-wrap" style="border:none;border-radius:0;margin:-4px -4px">
+    <table>
+      <thead>
+        <tr>
+          <th>Serveur</th>
+          <th>Plan</th>
+          <th>Statut</th>
+          <th>Renouvellement</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Subscriptions}}
+        <tr>
+          <td class="td-primary td-mono">{{.GuildID}}</td>
+          <td><span class="badge {{planBadge .Plan}}">{{planLabel .Plan}}</span></td>
+          <td>
+            {{if eq .Status "active"}}
+            <span class="badge badge-success"><span class="badge-dot"></span>Actif</span>
+            {{else}}
+            <span class="badge badge-muted">{{.Status}}</span>
+            {{end}}
+          </td>
+          <td class="td-muted">
+            {{if .CurrentPeriodEnd.IsZero}}—{{else}}{{formatTime .CurrentPeriodEnd}}{{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<div class="card-title mb-4" style="font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted)">Choisir un plan</div>
+<div class="pricing-grid">
+  {{range .Plans}}
+  <div class="pricing-card{{if .Current}} featured{{end}}">
+    {{if .Current}}<div style="position:absolute;top:-1px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;font-size:.65rem;font-weight:700;letter-spacing:.1em;padding:3px 10px;border-radius:0 0 6px 6px">ACTUEL</div>{{end}}
+    <div class="pricing-name">{{.Name}}</div>
+    <div class="pricing-price">
+      {{if eq .Price "0"}}Gratuit{{else}}{{.Price}}€<span>{{.Period}}</span>{{end}}
+    </div>
+    <ul class="pricing-features">
+      {{range .Features}}
+      <li class="pricing-feature">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        {{.}}
+      </li>
+      {{end}}
+    </ul>
+    {{if .Current}}
+    <button class="btn btn-secondary w-full" disabled>Plan actuel</button>
+    {{else if eq .ID "free"}}
+    <button class="btn btn-ghost w-full" disabled>Plan de base</button>
+    {{else if eq .ID "enterprise"}}
+    <a href="mailto:contact@bastion.gg" class="btn btn-secondary w-full" style="justify-content:center">Contacter</a>
+    {{else}}
+    <button class="btn btn-primary w-full" disabled title="Stripe bientôt disponible">
+      Upgrader — bientôt
+    </button>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}

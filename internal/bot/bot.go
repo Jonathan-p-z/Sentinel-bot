@@ -51,6 +51,8 @@ type Bot struct {
 	detectAggMu    sync.Mutex
 	lockdownMu     sync.Mutex
 	lockdownMap    map[string]*lockdownSnapshot
+	riskActionMu   sync.Mutex
+	riskActionAgg  map[string]*riskActionAggregate
 }
 
 type auditAggregate struct {
@@ -112,7 +114,8 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 		auditAgg:    make(map[string]*auditAggregate),
 		warnAgg:     make(map[string]*warningAggregate),
 		detectAgg:   make(map[string]*detectionAggregate),
-		lockdownMap: make(map[string]*lockdownSnapshot),
+		lockdownMap:   make(map[string]*lockdownSnapshot),
+		riskActionAgg: make(map[string]*riskActionAggregate),
 	}
 
 	b.antispam = antispam.New(cfg.Thresholds, riskEngine, auditLogger)
@@ -160,6 +163,10 @@ func (b *Bot) Start() error {
 	b.startDailySummary()
 
 	return nil
+}
+
+func (b *Bot) Session() *discordgo.Session {
+	return b.session
 }
 
 func (b *Bot) Close(ctx context.Context) {

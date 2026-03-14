@@ -11,6 +11,7 @@ import (
 	"sentinel-adaptive/internal/analytics"
 	"sentinel-adaptive/internal/bot"
 	"sentinel-adaptive/internal/config"
+	"sentinel-adaptive/internal/dashboard"
 	"sentinel-adaptive/internal/modules/audit"
 	"sentinel-adaptive/internal/playbook"
 	"sentinel-adaptive/internal/risk"
@@ -34,7 +35,11 @@ func main() {
 		_ = logger.Sync()
 	}()
 
-	store, err := storage.New(cfg.DatabasePath)
+	if cfg.DatabaseURL == "" {
+		logger.Fatal("DATABASE_URL is required (PostgreSQL connection string)")
+	}
+
+	store, err := storage.New(cfg.DatabaseURL)
 	if err != nil {
 		logger.Fatal("storage init failed", zap.Error(err))
 	}
@@ -63,17 +68,38 @@ func main() {
 	}
 	logger.Info("bot started")
 
-	var server *http.Server
+	var healthServer *http.Server
 	if cfg.Health.Enabled {
-		server = &http.Server{Addr: cfg.Health.Addr}
-		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))
 		})
+		healthServer = &http.Server{Addr: cfg.Health.Addr, Handler: mux}
 		go func() {
 			logger.Info("health endpoint enabled", zap.String("addr", cfg.Health.Addr))
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Error("health server error", zap.Error(err))
+			}
+		}()
+	}
+
+	var dashServer *http.Server
+	if cfg.Dashboard.Addr != "" {
+		dashSrv, err := dashboard.New(cfg, store, botSvc.Session(), logger)
+		if err != nil {
+			logger.Fatal("dashboard init failed", zap.Error(err))
+		}
+		dashServer = &http.Server{
+			Addr:         cfg.Dashboard.Addr,
+			Handler:      dashSrv,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 30 * time.Second,
+		}
+		go func() {
+			logger.Info("dashboard started", zap.String("addr", cfg.Dashboard.Addr))
+			if err := dashServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("dashboard error", zap.Error(err))
 			}
 		}()
 	}
@@ -86,8 +112,11 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if server != nil {
-		_ = server.Shutdown(ctx)
+	if healthServer != nil {
+		_ = healthServer.Shutdown(ctx)
+	}
+	if dashServer != nil {
+		_ = dashServer.Shutdown(ctx)
 	}
 	botSvc.Close(ctx)
 }

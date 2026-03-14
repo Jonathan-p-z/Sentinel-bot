@@ -1,0 +1,90 @@
+{{define "content"}}
+{{block "breadcrumb" .}}
+<span class="current">Administration</span>
+{{end}}
+
+<div class="admin-banner">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+  </svg>
+  Zone super-admin — accès réservé à {{.User.Username}}
+</div>
+
+<div class="page-header">
+  <div class="page-title">Super Administration</div>
+  <div class="page-subtitle">Vue globale de tous les serveurs et clients.</div>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card accent">
+    <div class="stat-label">Serveurs enregistrés</div>
+    <div class="stat-value">{{.TotalGuilds}}</div>
+    <div class="stat-meta">Avec au moins un événement</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Plan Free</div>
+    <div class="stat-value">{{index .PlanCounts "free"}}</div>
+    <div class="stat-meta">Abonnements actifs</div>
+  </div>
+  <div class="stat-card accent">
+    <div class="stat-label">Plan Pro</div>
+    <div class="stat-value">{{index .PlanCounts "pro"}}</div>
+    <div class="stat-meta">Abonnements actifs</div>
+  </div>
+  <div class="stat-card success">
+    <div class="stat-label">Plan Business+</div>
+    <div class="stat-value">{{add (index .PlanCounts "business") (index .PlanCounts "enterprise")}}</div>
+    <div class="stat-meta">Business + Enterprise</div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Répartition par plan</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:8px">
+      {{range $plan, $count := .PlanCounts}}
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="badge {{planBadge $plan}}">{{planLabel $plan}}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <div style="width:120px;height:6px;background:var(--bg-input);border-radius:3px;overflow:hidden">
+            <div style="height:100%;background:var(--accent);width:{{$count}}%;min-width:{{if gt $count 0}}4px{{else}}0{{end}};border-radius:3px;transition:.3s"></div>
+          </div>
+          <span style="font-weight:600;color:var(--text);font-size:.88rem;min-width:24px;text-align:right">{{$count}}</span>
+        </div>
+      </div>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Revenus mensuels estimés</span>
+      <span class="badge badge-muted">placeholder</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="flex items-center justify-between">
+        <span class="text-secondary text-sm">Pro ({{index .PlanCounts "pro"}} × 4.99€)</span>
+        <span style="font-weight:600;color:var(--text)">{{mul (index .PlanCounts "pro") 499}}€</span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-secondary text-sm">Business ({{index .PlanCounts "business"}} × 14.99€)</span>
+        <span style="font-weight:600;color:var(--text)">{{mul (index .PlanCounts "business") 1499}}€</span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-secondary text-sm">Enterprise ({{index .PlanCounts "enterprise"}} × 49.99€)</span>
+        <span style="font-weight:600;color:var(--text)">{{mul (index .PlanCounts "enterprise") 4999}}€</span>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:10px" class="flex items-center justify-between">
+        <span style="font-weight:600;color:var(--text)">MRR total</span>
+        <span style="font-size:1.3rem;font-weight:700;color:var(--success)">
+          {{add (add (mul (index .PlanCounts "pro") 499) (mul (index .PlanCounts "business") 1499)) (mul (index .PlanCounts "enterprise") 4999)}}€
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

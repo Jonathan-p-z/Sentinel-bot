@@ -1,0 +1,78 @@
+{{define "content"}}
+{{block "breadcrumb" .}}
+<span class="current">Mes serveurs</span>
+{{end}}
+
+<div class="page-header">
+  <div class="page-title">Mes serveurs</div>
+  <div class="page-subtitle">Serveurs Discord où vous avez les permissions admin.</div>
+</div>
+
+{{if not .Guilds}}
+<div class="empty-state">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+    <circle cx="9" cy="7" r="4"/>
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+  </svg>
+  <h3>Aucun serveur trouvé</h3>
+  <p>Vous n'avez pas les permissions admin sur des serveurs, ou aucun serveur n'a encore été chargé.</p>
+  <div style="margin-top:20px">
+    <a href="{{inviteURL}}" target="_blank" class="btn btn-primary">Ajouter Bastion à un serveur</a>
+  </div>
+</div>
+{{else}}
+<div class="guild-grid">
+  {{range .Guilds}}
+  {{if .HasBastion}}
+  <a class="guild-card" href="/app/guild?id={{.ID}}">
+    <div class="guild-icon">
+      {{if .Icon}}
+      <img src="{{guildIconURL .ID .Icon}}" alt="{{.Name}}">
+      {{else}}
+      {{printf "%.1s" .Name}}
+      {{end}}
+    </div>
+    <div class="guild-info">
+      <div class="guild-name">{{.Name}}</div>
+      <div class="guild-meta">
+        <span class="badge {{planBadge .Plan}}">{{planLabel .Plan}}</span>
+        <span class="badge badge-success">
+          <span class="badge-dot"></span>Actif
+        </span>
+      </div>
+    </div>
+  </a>
+  {{else}}
+  <div class="guild-card no-bot">
+    <div class="guild-icon">
+      {{if .Icon}}
+      <img src="{{guildIconURL .ID .Icon}}" alt="{{.Name}}">
+      {{else}}
+      {{printf "%.1s" .Name}}
+      {{end}}
+    </div>
+    <div class="guild-info">
+      <div class="guild-name">{{.Name}}</div>
+      <div class="guild-meta">
+        <span class="badge badge-muted">Bastion absent</span>
+      </div>
+    </div>
+    <a href="{{inviteURL}}" target="_blank" style="position:absolute;right:14px;top:50%;transform:translateY(-50%)" class="btn btn-primary btn-sm">Ajouter</a>
+  </div>
+  {{end}}
+  {{end}}
+</div>
+
+<div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--border)">
+  <p class="text-muted text-sm">
+    Vous ne voyez pas votre serveur ?
+    <a href="{{inviteURL}}" target="_blank">Ajoutez Bastion</a>
+    ou
+    <a href="/auth/login">reconnectez-vous</a>
+    pour mettre à jour la liste.
+  </p>
+</div>
+{{end}}
+{{end}}

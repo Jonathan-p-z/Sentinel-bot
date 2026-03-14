@@ -12,22 +12,42 @@ import (
 )
 
 type Config struct {
-	DiscordToken              string         `yaml:"discord_token"`
-	DatabasePath              string         `yaml:"database_path"`
-	LogLevel                  string         `yaml:"log_level"`
-	DefaultSecurityLogChannel string         `yaml:"default_security_log_channel"`
-	DefaultLanguage           string         `yaml:"default_language"`
-	RetentionDays             int            `yaml:"retention_days"`
-	RulePreset                string         `yaml:"rule_preset"`
-	Mode                      string         `yaml:"mode"`
-	Health                    HealthConfig   `yaml:"health"`
-	Risk                      RiskConfig     `yaml:"risk"`
-	Trust                     TrustConfig    `yaml:"trust"`
-	Thresholds                Thresholds     `yaml:"thresholds"`
-	Nuke                      NukeConfig     `yaml:"nuke"`
-	Actions                   ActionConfig   `yaml:"actions"`
-	Notifications             NotifyConfig   `yaml:"notifications"`
-	Playbook                  PlaybookConfig `yaml:"playbook"`
+	DiscordToken              string          `yaml:"discord_token"`
+	DatabaseURL               string          `yaml:"database_url"`
+	DatabasePath              string          `yaml:"database_path"` // legacy, unused
+	LogLevel                  string          `yaml:"log_level"`
+	DefaultSecurityLogChannel string          `yaml:"default_security_log_channel"`
+	DefaultLanguage           string          `yaml:"default_language"`
+	RetentionDays             int             `yaml:"retention_days"`
+	RulePreset                string          `yaml:"rule_preset"`
+	Mode                      string          `yaml:"mode"`
+	Health                    HealthConfig    `yaml:"health"`
+	Risk                      RiskConfig      `yaml:"risk"`
+	Trust                     TrustConfig     `yaml:"trust"`
+	Thresholds                Thresholds      `yaml:"thresholds"`
+	Nuke                      NukeConfig      `yaml:"nuke"`
+	Actions                   ActionConfig    `yaml:"actions"`
+	Notifications             NotifyConfig    `yaml:"notifications"`
+	Playbook                  PlaybookConfig  `yaml:"playbook"`
+	Dashboard                 DashboardConfig `yaml:"dashboard"`
+	Stripe                    StripeConfig    `yaml:"stripe"`
+	AdminDiscordUserID        string          `yaml:"admin_discord_user_id"`
+}
+
+type DashboardConfig struct {
+	Addr                string `yaml:"addr"`
+	DiscordClientID     string `yaml:"client_id"`
+	DiscordClientSecret string `yaml:"client_secret"`
+	RedirectURL         string `yaml:"redirect_url"`
+	SessionSecret       string `yaml:"session_secret"`
+}
+
+type StripeConfig struct {
+	SecretKey          string `yaml:"secret_key"`
+	WebhookSecret      string `yaml:"webhook_secret"`
+	PriceIDPro         string `yaml:"price_id_pro"`
+	PriceIDBusiness    string `yaml:"price_id_business"`
+	PriceIDEnterprise  string `yaml:"price_id_enterprise"`
 }
 
 type HealthConfig struct {
@@ -191,7 +211,16 @@ func Load() (Config, error) {
 
 func applyEnv(cfg *Config) {
 	cfg.DiscordToken = envString("DISCORD_TOKEN", cfg.DiscordToken)
+	cfg.DatabaseURL = envString("DATABASE_URL", cfg.DatabaseURL)
 	cfg.DatabasePath = envString("DATABASE_PATH", cfg.DatabasePath)
+	cfg.AdminDiscordUserID = envString("ADMIN_DISCORD_USER_ID", cfg.AdminDiscordUserID)
+	cfg.Dashboard.Addr = envString("DASHBOARD_ADDR", cfg.Dashboard.Addr)
+	cfg.Dashboard.DiscordClientID = envString("DISCORD_CLIENT_ID", cfg.Dashboard.DiscordClientID)
+	cfg.Dashboard.DiscordClientSecret = envString("DISCORD_CLIENT_SECRET", cfg.Dashboard.DiscordClientSecret)
+	cfg.Dashboard.RedirectURL = envString("DASHBOARD_REDIRECT_URL", cfg.Dashboard.RedirectURL)
+	cfg.Dashboard.SessionSecret = envString("DASHBOARD_SESSION_SECRET", cfg.Dashboard.SessionSecret)
+	cfg.Stripe.SecretKey = envString("STRIPE_SECRET_KEY", cfg.Stripe.SecretKey)
+	cfg.Stripe.WebhookSecret = envString("STRIPE_WEBHOOK_SECRET", cfg.Stripe.WebhookSecret)
 	cfg.LogLevel = envString("LOG_LEVEL", cfg.LogLevel)
 	cfg.DefaultSecurityLogChannel = envString("DEFAULT_SECURITY_LOG_CHANNEL", cfg.DefaultSecurityLogChannel)
 	cfg.DefaultLanguage = envString("DEFAULT_LANGUAGE", cfg.DefaultLanguage)

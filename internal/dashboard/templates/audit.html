@@ -1,0 +1,59 @@
+{{define "content"}}
+{{block "breadcrumb" .}}
+<a href="/app">Serveurs</a>
+<span class="sep">/</span>
+<a href="/app/guild?id={{.Guild.ID}}">{{.Guild.Name}}</a>
+<span class="sep">/</span>
+<span class="current">Audit Logs</span>
+{{end}}
+
+<div class="page-header flex items-center justify-between">
+  <div>
+    <div class="page-title">Audit Logs</div>
+    <div class="page-subtitle">{{.Since}} · {{len .Logs}} événements</div>
+  </div>
+  <div class="flex gap-2">
+    <a href="?id={{.Guild.ID}}&since=1d" class="btn btn-sm {{if eq .Since "Dernières 24h"}}btn-primary{{else}}btn-secondary{{end}}">24h</a>
+    <a href="?id={{.Guild.ID}}&since=7d" class="btn btn-sm {{if eq .Since "7 derniers jours"}}btn-primary{{else}}btn-secondary{{end}}">7j</a>
+    <a href="?id={{.Guild.ID}}&since=30d" class="btn btn-sm {{if eq .Since "30 derniers jours"}}btn-primary{{else}}btn-secondary{{end}}">30j</a>
+  </div>
+</div>
+
+{{if not .Logs}}
+<div class="empty-state">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+    <polyline points="14 2 14 8 20 8"/>
+  </svg>
+  <h3>Aucun log pour cette période</h3>
+  <p>Les événements de sécurité apparaîtront ici quand Bastion agira sur ce serveur.</p>
+</div>
+{{else}}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Niveau</th>
+        <th>Événement</th>
+        <th>Utilisateur</th>
+        <th>Détails</th>
+        <th>Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Logs}}
+      <tr>
+        <td><span class="badge {{badgeClass .Level}}">{{.Level}}</span></td>
+        <td class="td-primary">{{.Event}}</td>
+        <td class="td-mono">{{if .UserID}}{{.UserID}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{.Details}}">
+          <span class="text-secondary text-sm">{{.Details}}</span>
+        </td>
+        <td class="td-muted" data-ts="{{.CreatedAt.Unix}}">{{formatTime .CreatedAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+{{end}}

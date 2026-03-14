@@ -1,0 +1,71 @@
+{{define "content"}}
+{{block "breadcrumb" .}}
+<a href="/app">Serveurs</a>
+<span class="sep">/</span>
+<a href="/app/guild?id={{.Guild.ID}}">{{.Guild.Name}}</a>
+<span class="sep">/</span>
+<span class="current">Risk Scores</span>
+{{end}}
+
+<div class="page-header">
+  <div class="page-title">Risk Scores</div>
+  <div class="page-subtitle">Événements à haut risque des 7 derniers jours.</div>
+</div>
+
+<div class="alert alert-info mb-4">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px">
+    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+  </svg>
+  Les scores de risque sont calculés en mémoire et décroissent dans le temps. Cette vue affiche les événements déclencheurs récents depuis les audit logs.
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">🔴 Alertes CRIT</span>
+      <span class="badge badge-danger">{{len .CritLogs}}</span>
+    </div>
+    {{if not .CritLogs}}
+    <div class="empty-state" style="padding:30px 0">
+      <p>Aucune alerte critique récente.</p>
+    </div>
+    {{else}}
+    <div style="display:flex;flex-direction:column;gap:0">
+      {{range .CritLogs}}
+      <div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-weight:500;color:var(--text);font-size:.88rem;margin-bottom:2px">{{.Event}}</div>
+          <div class="text-muted text-sm">{{if .UserID}}User {{.UserID}}{{end}} {{if .Details}}· {{.Details}}{{end}}</div>
+        </div>
+        <span class="td-muted" style="white-space:nowrap;flex-shrink:0" data-ts="{{.CreatedAt.Unix}}">{{timeAgo .CreatedAt}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">🟡 Alertes WARN</span>
+      <span class="badge badge-warning">{{len .WarnLogs}}</span>
+    </div>
+    {{if not .WarnLogs}}
+    <div class="empty-state" style="padding:30px 0">
+      <p>Aucune alerte warning récente.</p>
+    </div>
+    {{else}}
+    <div style="display:flex;flex-direction:column;gap:0">
+      {{range .WarnLogs}}
+      <div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-weight:500;color:var(--text);font-size:.88rem;margin-bottom:2px">{{.Event}}</div>
+          <div class="text-muted text-sm">{{if .UserID}}User {{.UserID}}{{end}} {{if .Details}}· {{.Details}}{{end}}</div>
+        </div>
+        <span class="td-muted" style="white-space:nowrap;flex-shrink:0" data-ts="{{.CreatedAt.Unix}}">{{timeAgo .CreatedAt}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

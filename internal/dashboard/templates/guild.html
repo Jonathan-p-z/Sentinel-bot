@@ -1,0 +1,93 @@
+{{define "content"}}
+{{block "breadcrumb" .}}
+<a href="/app">Serveurs</a>
+<span class="sep">/</span>
+<span class="current">{{.Guild.Name}}</span>
+{{end}}
+
+<div class="page-header flex items-center justify-between">
+  <div>
+    <div class="page-title flex items-center gap-3">
+      {{if .Guild.Icon}}
+      <img src="{{guildIconURL .Guild.ID .Guild.Icon}}" style="width:32px;height:32px;border-radius:8px" alt="">
+      {{end}}
+      {{.Guild.Name}}
+      <span class="badge {{planBadge .Guild.Plan}}">{{planLabel .Guild.Plan}}</span>
+    </div>
+    <div class="page-subtitle">Vue d'ensemble de la sécurité du serveur.</div>
+  </div>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card accent">
+    <div class="stat-label">Modules actifs</div>
+    <div class="stat-value">4</div>
+    <div class="stat-meta">sur 7 disponibles</div>
+  </div>
+  <div class="stat-card danger">
+    <div class="stat-label">Alertes CRIT (7j)</div>
+    <div class="stat-value" id="crit-count">—</div>
+    <div class="stat-meta">Niveau critique</div>
+  </div>
+  <div class="stat-card warning">
+    <div class="stat-label">Alertes WARN (7j)</div>
+    <div class="stat-value" id="warn-count">—</div>
+    <div class="stat-meta">Niveau avertissement</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Plan actuel</div>
+    <div class="stat-value" style="font-size:1.4rem">{{planLabel .Guild.Plan}}</div>
+    <div class="stat-meta"><a href="/app/billing">Gérer l'abonnement</a></div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Navigation rapide</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <a href="/app/guild/audit?id={{.Guild.ID}}" class="btn btn-secondary" style="justify-content:flex-start">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/>
+        </svg>
+        Voir les Audit Logs
+      </a>
+      <a href="/app/guild/risk?id={{.Guild.ID}}" class="btn btn-secondary" style="justify-content:flex-start">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        Voir les Risk Scores
+      </a>
+      <a href="/app/guild/modules?id={{.Guild.ID}}" class="btn btn-secondary" style="justify-content:flex-start">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        Voir les Modules
+      </a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Informations</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="flex items-center justify-between">
+        <span class="text-secondary text-sm">Guild ID</span>
+        <code>{{.Guild.ID}}</code>
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-secondary text-sm">Plan</span>
+        <span class="badge {{planBadge .Guild.Plan}}">{{planLabel .Guild.Plan}}</span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-secondary text-sm">Statut Bastion</span>
+        <span class="badge badge-success"><span class="badge-dot"></span> Actif</span>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
