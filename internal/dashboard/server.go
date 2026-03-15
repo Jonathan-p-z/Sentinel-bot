@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"mime"
 	"net/http"
 	"time"
 
@@ -59,6 +60,11 @@ func New(cfg config.Config, store *storage.Store, discord *discordgo.Session, lo
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
+}
+
+func init() {
+	mime.AddExtensionType(".css", "text/css; charset=utf-8")
+	mime.AddExtensionType(".js", "application/javascript; charset=utf-8")
 }
 
 func (s *Server) routes() {
