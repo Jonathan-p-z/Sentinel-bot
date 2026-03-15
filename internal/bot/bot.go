@@ -16,6 +16,7 @@ import (
 	"sentinel-adaptive/internal/modules/antispam"
 	"sentinel-adaptive/internal/modules/audit"
 	"sentinel-adaptive/internal/modules/behavior"
+	"sentinel-adaptive/internal/modules/escalation"
 	"sentinel-adaptive/internal/modules/verification"
 	"sentinel-adaptive/internal/playbook"
 	"sentinel-adaptive/internal/risk"
@@ -43,6 +44,7 @@ type Bot struct {
 	antinukeExempt *antinuke.Module
 	behavior       *behavior.Module
 	verify         *verification.Module
+	escalation     *escalation.Module
 	auditAgg       map[string]*auditAggregate
 	auditAggMu     sync.Mutex
 	warnAgg        map[string]*warningAggregate
@@ -125,6 +127,7 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 	b.antinukeExempt = antinuke.New(time.Duration(cfg.Nuke.ExemptWindowSeconds) * time.Second)
 	b.behavior = behavior.New()
 	b.verify = verification.New()
+	b.escalation = escalation.New(cfg.Escalation, store, auditLogger)
 	if b.audit != nil {
 		b.audit.SetNotifier(func(ctx context.Context, entry storage.AuditLog) {
 			if !b.cfg.Notifications.AuditToChannel {
@@ -615,6 +618,11 @@ func (b *Bot) applyRiskActions(ctx context.Context, guildID, userID string, scor
 
 	trustScore := b.trust.GetScore(guildID, userID)
 	effective := b.risk.EffectiveScore(score, trustScore)
+
+	// Centralized escalation ladder — additive, runs before legacy action logic.
+	if !b.isWhitelisted(ctx, guildID, userID) {
+		b.escalation.HandleScore(ctx, b.session, guildID, userID, effective, auditOnly)
+	}
 
 	actions := b.cfg.Actions
 	action := ""

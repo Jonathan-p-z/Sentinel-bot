@@ -582,6 +582,33 @@ func (s *Store) CountSubscriptionsByPlan(ctx context.Context) (map[string]int, e
 	return result, rows.Err()
 }
 
+// ── Escalation log ────────────────────────────────────────────────────────────
+
+func (s *Store) AddEscalationLog(ctx context.Context, guildID, userID, action string, score float64) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO escalation_log (guild_id, user_id, action, score, created_at)
+		VALUES ($1, $2, $3, $4, $5)`,
+		guildID, userID, action, score, time.Now().Unix())
+	return err
+}
+
+func (s *Store) GetLastEscalation(ctx context.Context, guildID, userID string) (time.Time, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT created_at FROM escalation_log
+		WHERE guild_id = $1 AND user_id = $2
+		ORDER BY created_at DESC LIMIT 1`,
+		guildID, userID)
+	var ts int64
+	err := row.Scan(&ts)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, err
+	}
+	return time.Unix(ts, 0), true, nil
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func isIgnorableMigrationError(err error) bool {

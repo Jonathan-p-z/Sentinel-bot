@@ -12,26 +12,39 @@ import (
 )
 
 type Config struct {
-	DiscordToken              string          `yaml:"discord_token"`
-	DatabaseURL               string          `yaml:"database_url"`
-	DatabasePath              string          `yaml:"database_path"` // legacy, unused
-	LogLevel                  string          `yaml:"log_level"`
-	DefaultSecurityLogChannel string          `yaml:"default_security_log_channel"`
-	DefaultLanguage           string          `yaml:"default_language"`
-	RetentionDays             int             `yaml:"retention_days"`
-	RulePreset                string          `yaml:"rule_preset"`
-	Mode                      string          `yaml:"mode"`
-	Health                    HealthConfig    `yaml:"health"`
-	Risk                      RiskConfig      `yaml:"risk"`
-	Trust                     TrustConfig     `yaml:"trust"`
-	Thresholds                Thresholds      `yaml:"thresholds"`
-	Nuke                      NukeConfig      `yaml:"nuke"`
-	Actions                   ActionConfig    `yaml:"actions"`
-	Notifications             NotifyConfig    `yaml:"notifications"`
-	Playbook                  PlaybookConfig  `yaml:"playbook"`
-	Dashboard                 DashboardConfig `yaml:"dashboard"`
-	Stripe                    StripeConfig    `yaml:"stripe"`
-	AdminDiscordUserID        string          `yaml:"admin_discord_user_id"`
+	DiscordToken              string            `yaml:"discord_token"`
+	DatabaseURL               string            `yaml:"database_url"`
+	DatabasePath              string            `yaml:"database_path"` // legacy, unused
+	LogLevel                  string            `yaml:"log_level"`
+	DefaultSecurityLogChannel string            `yaml:"default_security_log_channel"`
+	DefaultLanguage           string            `yaml:"default_language"`
+	RetentionDays             int               `yaml:"retention_days"`
+	RulePreset                string            `yaml:"rule_preset"`
+	Mode                      string            `yaml:"mode"`
+	Health                    HealthConfig      `yaml:"health"`
+	Risk                      RiskConfig        `yaml:"risk"`
+	Trust                     TrustConfig       `yaml:"trust"`
+	Thresholds                Thresholds        `yaml:"thresholds"`
+	Nuke                      NukeConfig        `yaml:"nuke"`
+	Actions                   ActionConfig      `yaml:"actions"`
+	Notifications             NotifyConfig      `yaml:"notifications"`
+	Playbook                  PlaybookConfig    `yaml:"playbook"`
+	Escalation                EscalationConfig  `yaml:"escalation"`
+	Dashboard                 DashboardConfig   `yaml:"dashboard"`
+	Stripe                    StripeConfig      `yaml:"stripe"`
+	AdminDiscordUserID        string            `yaml:"admin_discord_user_id"`
+}
+
+type EscalationPalier struct {
+	Score           float64 `yaml:"score"`
+	Action          string  `yaml:"action"`
+	DurationMinutes int     `yaml:"duration_minutes"`
+}
+
+type EscalationConfig struct {
+	Enabled         bool               `yaml:"enabled"`
+	Paliers         []EscalationPalier `yaml:"paliers"`
+	CooldownMinutes int                `yaml:"cooldown_minutes"`
 }
 
 type DashboardConfig struct {
@@ -182,6 +195,17 @@ func DefaultConfig() Config {
 			},
 		},
 		Playbook: PlaybookConfig{LockdownMinutes: 15, StrictModeMinutes: 10, ExitStepSeconds: 20, LockdownSlowmode: 10, LockdownDenySend: true},
+		Escalation: EscalationConfig{
+			Enabled: false,
+			Paliers: []EscalationPalier{
+				{Score: 30, Action: "warn"},
+				{Score: 50, Action: "mute", DurationMinutes: 5},
+				{Score: 70, Action: "mute", DurationMinutes: 30},
+				{Score: 85, Action: "kick"},
+				{Score: 100, Action: "ban"},
+			},
+			CooldownMinutes: 60,
+		},
 	}
 }
 

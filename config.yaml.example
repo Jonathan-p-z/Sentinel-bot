@@ -69,3 +69,20 @@ playbook:
   exit_step_seconds: 20
   lockdown_slowmode_seconds: 10
   lockdown_deny_send: true
+
+escalation:
+  enabled: true
+  paliers:
+    - score: 30
+      action: warn
+    - score: 50
+      action: mute
+      duration_minutes: 5
+    - score: 70
+      action: mute
+      duration_minutes: 30
+    - score: 85
+      action: kick
+    - score: 100
+      action: ban
+  cooldown_minutes: 60
