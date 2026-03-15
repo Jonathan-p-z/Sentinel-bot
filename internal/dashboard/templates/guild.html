@@ -1,13 +1,13 @@
-{{define "content"}}
-{{block "breadcrumb" .}}
+{{define "breadcrumb"}}
 <a href="/app">Serveurs</a>
 <span class="sep">/</span>
 <span class="current">{{.Guild.Name}}</span>
 {{end}}
 
+{{define "content"}}
 <div class="page-header flex items-center justify-between">
   <div>
-    <div class="page-title flex items-center gap-3">
+    <div class="page-title">
       {{if .Guild.Icon}}
       <img src="{{guildIconURL .Guild.ID .Guild.Icon}}" style="width:32px;height:32px;border-radius:8px" alt="">
       {{end}}
@@ -46,26 +46,26 @@
     <div class="card-header">
       <span class="card-title">Navigation rapide</span>
     </div>
-    <div style="display:flex;flex-direction:column;gap:8px">
-      <a href="/app/guild/audit?id={{.Guild.ID}}" class="btn btn-secondary" style="justify-content:flex-start">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <div class="quicknav-grid">
+      <a href="/app/guild/audit?id={{.Guild.ID}}" class="quicknav-item">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/>
         </svg>
-        Voir les Audit Logs
+        Audit Logs
       </a>
-      <a href="/app/guild/risk?id={{.Guild.ID}}" class="btn btn-secondary" style="justify-content:flex-start">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <a href="/app/guild/risk?id={{.Guild.ID}}" class="quicknav-item">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
           <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
         </svg>
-        Voir les Risk Scores
+        Risk Scores
       </a>
-      <a href="/app/guild/modules?id={{.Guild.ID}}" class="btn btn-secondary" style="justify-content:flex-start">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <a href="/app/guild/modules?id={{.Guild.ID}}" class="quicknav-item">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
         </svg>
-        Voir les Modules
+        Modules
       </a>
     </div>
   </div>
@@ -88,6 +88,20 @@
         <span class="badge badge-success"><span class="badge-dot"></span> Actif</span>
       </div>
     </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px">
+  <div class="card-header">
+    <span class="card-title">Activité récente</span>
+    <a href="/app/guild/audit?id={{.Guild.ID}}" class="btn btn-ghost btn-sm">Voir tout</a>
+  </div>
+  <div class="empty-state" style="padding:36px 20px">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    </svg>
+    <h3>Aucune activité récente</h3>
+    <p>Les événements de sécurité détectés par Bastion apparaîtront ici.</p>
   </div>
 </div>
 {{end}}
