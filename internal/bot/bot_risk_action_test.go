@@ -4,7 +4,7 @@ import "testing"
 
 func TestShouldSuppressRiskAction(t *testing.T) {
 	b := &Bot{
-		riskActionAgg: make(map[string]*riskActionAggregate),
+		riskActionAgg: make(map[string]*riskA * ctionAggregate),
 	}
 
 	if suppressed := b.shouldSuppressRiskAction("g1", "u1", "ban", false); suppressed {

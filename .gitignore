@@ -13,9 +13,6 @@ sentinel
 *.exe
 
 # Assets locaux
-*.jpg
-*.png
-*.jpeg
 
 # Logs
 *.log

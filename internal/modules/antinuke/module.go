@@ -13,6 +13,10 @@ type Module struct {
 	window  time.Duration
 }
 
+func (m *Module) CountAny(s string, param2 string) any {
+	panic("unimplemented")
+}
+
 func New(window time.Duration) *Module {
 	if window <= 0 {
 		window = 20 * time.Second
