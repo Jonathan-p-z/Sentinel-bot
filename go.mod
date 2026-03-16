@@ -1,6 +1,6 @@
 module sentinel-adaptive
 
-go 1.25.0
+go 1.22
 
 require (
 	github.com/bwmarrin/discordgo v0.27.1
