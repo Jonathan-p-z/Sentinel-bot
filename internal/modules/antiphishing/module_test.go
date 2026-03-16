@@ -2,6 +2,7 @@ package antiphishing
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"sentinel-adaptive/internal/config"
@@ -25,5 +26,40 @@ func TestPhishingDetection(t *testing.T) {
 	block := map[string]struct{}{"bad.com": {}}
 	if _, flagged, _ := module.HandleMessage(context.Background(), &discordgo.Session{}, msg, "g1", allow, block, 25, true); !flagged {
 		t.Fatalf("expected phishing flag")
+	}
+}
+
+// TestPipelineFailOpen verifies that a URL not in any list is NOT flagged when
+// the reputation pipeline fails to reach external services (fail open).
+func TestPipelineFailOpen(t *testing.T) {
+	riskEngine := risk.NewEngine(config.RiskConfig{DecayPerMinute: 0, TTLMinutes: 60, TrustWeight: 0.5})
+	module := New(riskEngine, audit.NewLogger(nil, zap.NewNop()))
+
+	// localhost:0 is unreachable — redirect resolver and WHOIS will both fail.
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID: "2", ChannelID: "c1", GuildID: "g1",
+		Author:  &discordgo.User{ID: "u2"},
+		Content: "https://localhost:0/test",
+	}}
+	_, flagged, _ := module.HandleMessage(
+		context.Background(), &discordgo.Session{}, msg,
+		"g1", map[string]struct{}{}, map[string]struct{}{}, 25, true,
+	)
+	if flagged {
+		t.Fatalf("expected no flag when pipeline fails open (unreachable host)")
+	}
+}
+
+// TestSafeBrowsingSkippedWithoutAPIKey verifies that the Safe Browsing check
+// returns 0 immediately when SAFE_BROWSING_API_KEY is not set.
+func TestSafeBrowsingSkippedWithoutAPIKey(t *testing.T) {
+	_ = os.Unsetenv("SAFE_BROWSING_API_KEY")
+	module := New(
+		risk.NewEngine(config.RiskConfig{DecayPerMinute: 0, TTLMinutes: 60, TrustWeight: 0.5}),
+		audit.NewLogger(nil, zap.NewNop()),
+	)
+	score := module.checkSafeBrowsing(context.Background(), "https://evil-test.example.com")
+	if score != 0 {
+		t.Fatalf("expected score=0 when API key absent, got %.1f", score)
 	}
 }

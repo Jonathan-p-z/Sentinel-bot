@@ -33,6 +33,29 @@ type Config struct {
 	Dashboard                 DashboardConfig   `yaml:"dashboard"`
 	Stripe                    StripeConfig      `yaml:"stripe"`
 	AdminDiscordUserID        string            `yaml:"admin_discord_user_id"`
+	AltAccount                AltAccountConfig  `yaml:"altaccount"`
+	ShadowMute                ShadowMuteConfig  `yaml:"shadowmute"`
+	Onboarding                OnboardingConfig  `yaml:"onboarding"`
+}
+
+type AltAccountConfig struct {
+	Enabled bool `yaml:"enabled"`
+	LogOnly bool `yaml:"log_only"`
+}
+
+type ShadowMuteConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	LogChannelID string `yaml:"log_channel_id"`
+}
+
+type OnboardingConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	CaptchaEnabled bool   `yaml:"captcha_enabled"`
+	QuizEnabled    bool   `yaml:"quiz_enabled"`
+	VerifiedRoleID string `yaml:"verified_role_id"`
+	TimeoutMinutes int    `yaml:"timeout_minutes"`
+	QuizQuestion   string `yaml:"quiz_question"`
+	QuizAnswer     string `yaml:"quiz_answer"`
 }
 
 type EscalationPalier struct {
@@ -195,6 +218,23 @@ func DefaultConfig() Config {
 			},
 		},
 		Playbook: PlaybookConfig{LockdownMinutes: 15, StrictModeMinutes: 10, ExitStepSeconds: 20, LockdownSlowmode: 10, LockdownDenySend: true},
+		AltAccount: AltAccountConfig{
+			Enabled: true,
+			LogOnly: false,
+		},
+		ShadowMute: ShadowMuteConfig{
+			Enabled:      true,
+			LogChannelID: "",
+		},
+		Onboarding: OnboardingConfig{
+			Enabled:        false,
+			CaptchaEnabled: true,
+			QuizEnabled:    false,
+			VerifiedRoleID: "",
+			TimeoutMinutes: 5,
+			QuizQuestion:   "Quel est le sujet principal de ce serveur ?",
+			QuizAnswer:     "",
+		},
 		Escalation: EscalationConfig{
 			Enabled: false,
 			Paliers: []EscalationPalier{

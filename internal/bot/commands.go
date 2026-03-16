@@ -2,6 +2,8 @@ package bot
 
 import "github.com/bwmarrin/discordgo"
 
+func int64ptr(v int64) *int64 { return &v }
+
 func (b *Bot) registerCommands() error {
 	commands := []*discordgo.ApplicationCommand{
 		{
@@ -482,6 +484,67 @@ func (b *Bot) registerCommands() error {
 						discordgo.French:    "seuil ou secondes",
 						discordgo.EnglishUS: "threshold or seconds",
 						discordgo.SpanishES: "umbral o segundos",
+					},
+					Required: false,
+				},
+			},
+		},
+		{
+			Name:        "shadowmute",
+			Description: "Shadow-mute a user (messages deleted silently)",
+			DescriptionLocalizations: &map[discordgo.Locale]string{
+				discordgo.French:    "Shadow-mute un utilisateur (messages supprimes en silence)",
+				discordgo.EnglishUS: "Shadow-mute a user (messages deleted silently)",
+				discordgo.SpanishES: "Shadow-mute a un usuario (mensajes eliminados silenciosamente)",
+			},
+			DefaultMemberPermissions: int64ptr(discordgo.PermissionManageServer),
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "action",
+					Description: "add, remove, list",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "add, remove, list",
+						discordgo.EnglishUS: "add, remove, list",
+						discordgo.SpanishES: "add, remove, list",
+					},
+					Required: true,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "add", Value: "add"},
+						{Name: "remove", Value: "remove"},
+						{Name: "list", Value: "list"},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionUser,
+					Name:        "user",
+					Description: "target user",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "utilisateur cible",
+						discordgo.EnglishUS: "target user",
+						discordgo.SpanishES: "usuario objetivo",
+					},
+					Required: false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "duration",
+					Description: "duration: 30m, 2h, 7d (omit for permanent)",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "durée : 30m, 2h, 7d (vide = permanent)",
+						discordgo.EnglishUS: "duration: 30m, 2h, 7d (omit for permanent)",
+						discordgo.SpanishES: "duración: 30m, 2h, 7d (vacío = permanente)",
+					},
+					Required: false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "reason",
+					Description: "reason",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "raison",
+						discordgo.EnglishUS: "reason",
+						discordgo.SpanishES: "razón",
 					},
 					Required: false,
 				},

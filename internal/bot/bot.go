@@ -10,7 +10,9 @@ import (
 
 	"sentinel-adaptive/internal/analytics"
 	"sentinel-adaptive/internal/config"
+	"sentinel-adaptive/internal/modules/altaccount"
 	"sentinel-adaptive/internal/modules/antinuke"
+	"sentinel-adaptive/internal/modules/shadowmute"
 	"sentinel-adaptive/internal/modules/antiphishing"
 	"sentinel-adaptive/internal/modules/antiraid"
 	"sentinel-adaptive/internal/modules/antispam"
@@ -45,6 +47,8 @@ type Bot struct {
 	behavior       *behavior.Module
 	verify         *verification.Module
 	escalation     *escalation.Module
+	altaccount     *altaccount.Module
+	shadowmute     *shadowmute.Module
 	auditAgg       map[string]*auditAggregate
 	auditAggMu     sync.Mutex
 	warnAgg        map[string]*warningAggregate
@@ -126,8 +130,10 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 	b.antinuke = antinuke.New(time.Duration(cfg.Nuke.WindowSeconds) * time.Second)
 	b.antinukeExempt = antinuke.New(time.Duration(cfg.Nuke.ExemptWindowSeconds) * time.Second)
 	b.behavior = behavior.New()
-	b.verify = verification.New()
+	b.verify = verification.New(cfg.Onboarding, store, auditLogger)
 	b.escalation = escalation.New(cfg.Escalation, store, auditLogger)
+	b.altaccount = altaccount.New(cfg.AltAccount, store, riskEngine, auditLogger, b.escalation)
+	b.shadowmute = shadowmute.New(cfg.ShadowMute, store, auditLogger)
 	if b.audit != nil {
 		b.audit.SetNotifier(func(ctx context.Context, entry storage.AuditLog) {
 			if !b.cfg.Notifications.AuditToChannel {
@@ -187,11 +193,20 @@ func (b *Bot) onMessageCreate(session *discordgo.Session, msg *discordgo.Message
 	if msg.Author == nil || msg.Author.Bot {
 		return
 	}
+
+	ctx := context.Background()
+
+	// DM: only route to onboarding, nothing else.
 	if msg.GuildID == "" {
+		b.verify.HandleDM(ctx, session, msg)
 		return
 	}
 
-	ctx := context.Background()
+	// Shadow mute has highest priority: delete silently before any other module runs.
+	if b.shadowmute.HandleMessage(ctx, session, msg) {
+		return
+	}
+
 	settings := b.guildSettings(ctx, msg.GuildID)
 	auditOnly := b.isAuditMode(settings)
 
@@ -220,10 +235,11 @@ func (b *Bot) onGuildMemberAdd(session *discordgo.Session, event *discordgo.Guil
 		return
 	}
 	ctx := context.Background()
-	_ = session
 	if b.antiraid.HandleJoin(ctx, session, event) {
 		b.enterLockdown(ctx, event.GuildID, "anti_raid")
 	}
+	b.altaccount.HandleMemberAdd(ctx, session, event)
+	b.verify.HandleMemberAdd(ctx, session, event)
 }
 
 func (b *Bot) onChannelCreate(session *discordgo.Session, event *discordgo.ChannelCreate) {
@@ -294,6 +310,7 @@ func (b *Bot) onGuildBanAdd(session *discordgo.Session, event *discordgo.GuildBa
 		return
 	}
 	ctx := context.Background()
+	_ = b.store.AddBannedUser(ctx, event.GuildID, event.User.ID, event.User.Username)
 	actorID := b.resolveAuditActor(event.GuildID, discordgo.AuditLogActionMemberBanAdd, event.User.ID)
 	b.handleNukeAction(ctx, event.GuildID, actorID, "ban_add", event.User.ID)
 }

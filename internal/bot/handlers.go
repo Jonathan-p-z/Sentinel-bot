@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"sentinel-adaptive/internal/modules/audit"
+	"sentinel-adaptive/internal/modules/shadowmute"
 	"sentinel-adaptive/internal/storage"
 
 	"github.com/bwmarrin/discordgo"
@@ -23,6 +24,8 @@ func (b *Bot) onInteractionCreate(session *discordgo.Session, interaction *disco
 	switch data.Name {
 	case "status", "mode", "preset", "lockdown", "rules", "domain", "report", "language", "test", "logs", "risk", "whitelist", "nuke":
 		b.handleSecurityCommand(ctx, session, interaction, data.Name, data.Options)
+	case "shadowmute":
+		b.handleShadowMuteCommand(ctx, session, interaction, data.Options)
 	case "verify":
 		b.verify.HandleVerify(ctx)
 		lang := b.cfg.DefaultLanguage
@@ -558,4 +561,166 @@ func (b *Bot) commandEmbed(title, description string, color int, fields []*disco
 func (b *Bot) auditSecurity(ctx context.Context, guildID, message string) {
 	b.audit.Log(ctx, audit.LevelInfo, guildID, "", "security", message)
 	b.auditToChannel(ctx, guildID, message)
+}
+
+// ── Shadow mute command ───────────────────────────────────────────────────────
+
+func (b *Bot) handleShadowMuteCommand(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	lang := b.cfg.DefaultLanguage
+	if interaction.GuildID != "" {
+		lang = b.guildSettings(ctx, interaction.GuildID).Language
+	}
+	if lang == "" {
+		lang = b.cfg.DefaultLanguage
+	}
+
+	if interaction.GuildID == "" {
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", b.t(lang, "error_only_guild"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	// Verify ManageGuild permission.
+	if interaction.Member == nil || interaction.Member.Permissions&discordgo.PermissionManageServer == 0 {
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", b.t(lang, "error_no_permission"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	if len(options) == 0 {
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", b.t(lang, "error_no_subcommand"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	action := options[0].StringValue()
+
+	switch action {
+	case "add":
+		b.handleShadowMuteAdd(ctx, session, interaction, lang, options[1:])
+	case "remove":
+		b.handleShadowMuteRemove(ctx, session, interaction, lang, options[1:])
+	case "list":
+		b.handleShadowMuteList(ctx, session, interaction, lang)
+	default:
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", b.t(lang, "error_unknown"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+	}
+}
+
+func (b *Bot) handleShadowMuteAdd(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, lang string, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	var userID, durationStr, reason string
+	for _, opt := range options {
+		switch opt.Name {
+		case "user":
+			if u := opt.UserValue(session); u != nil {
+				userID = u.ID
+			}
+		case "duration":
+			durationStr = opt.StringValue()
+		case "reason":
+			reason = opt.StringValue()
+		}
+	}
+
+	if userID == "" {
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", b.t(lang, "error_user_ctx"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	var expiresAt *time.Time
+	if durationStr != "" {
+		d, err := shadowmute.ParseDuration(durationStr)
+		if err != nil {
+			b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", fmt.Sprintf("Durée invalide : %v", err), b.cfg.Notifications.EmbedColors.Error, nil), true)
+			return
+		}
+		t := time.Now().Add(d)
+		expiresAt = &t
+	}
+
+	mutedBy := ""
+	if interaction.Member != nil && interaction.Member.User != nil {
+		mutedBy = interaction.Member.User.ID
+	}
+
+	if err := b.shadowmute.AddMute(ctx, interaction.GuildID, userID, mutedBy, reason, expiresAt); err != nil {
+		b.logger.Warn("shadowmute add failed", zap.Error(err))
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "shadow_mute_add",
+		fmt.Sprintf("by=%s reason=%s expires=%v", mutedBy, reason, expiresAt))
+
+	expStr := "permanent"
+	if expiresAt != nil {
+		expStr = expiresAt.Format("02/01/2006 15:04 UTC")
+	}
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "Utilisateur", Value: "<@" + userID + ">", Inline: true},
+		{Name: "Expire", Value: expStr, Inline: true},
+		{Name: "Raison", Value: orDash(reason), Inline: false},
+	}
+	b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", "Utilisateur shadow-muté.", b.cfg.Notifications.EmbedColors.Action, fields), true)
+}
+
+func (b *Bot) handleShadowMuteRemove(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, lang string, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	var userID string
+	for _, opt := range options {
+		if opt.Name == "user" {
+			if u := opt.UserValue(session); u != nil {
+				userID = u.ID
+			}
+		}
+	}
+
+	if userID == "" {
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", b.t(lang, "error_user_ctx"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	if err := b.shadowmute.RemoveMute(ctx, interaction.GuildID, userID); err != nil {
+		b.logger.Warn("shadowmute remove failed", zap.Error(err))
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "shadow_mute_remove", "")
+
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "Utilisateur", Value: "<@" + userID + ">", Inline: true},
+	}
+	b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", "Shadow mute levé.", b.cfg.Notifications.EmbedColors.Action, fields), true)
+}
+
+func (b *Bot) handleShadowMuteList(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate, lang string) {
+	entries, err := b.shadowmute.ListMutes(ctx, interaction.GuildID)
+	if err != nil {
+		b.logger.Warn("shadowmute list failed", zap.Error(err))
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil), true)
+		return
+	}
+
+	if len(entries) == 0 {
+		b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", "Aucun utilisateur shadow-muté.", b.cfg.Notifications.EmbedColors.Action, nil), true)
+		return
+	}
+
+	lines := make([]string, 0, len(entries))
+	for _, e := range entries {
+		exp := "permanent"
+		if e.ExpiresAt != nil {
+			exp = e.ExpiresAt.Format("02/01 15:04")
+		}
+		lines = append(lines, fmt.Sprintf("<@%s> — expire : %s — raison : %s", e.UserID, exp, orDash(e.Reason)))
+	}
+
+	fields := []*discordgo.MessageEmbedField{
+		{Name: fmt.Sprintf("Utilisateurs (%d)", len(entries)), Value: strings.Join(lines, "\n"), Inline: false},
+	}
+	b.respondEmbed(session, interaction, b.commandEmbed("Shadow Mute", "Liste des shadow mutes actifs.", b.cfg.Notifications.EmbedColors.Action, fields), true)
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }

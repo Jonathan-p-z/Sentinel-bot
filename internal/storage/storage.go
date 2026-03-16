@@ -582,6 +582,174 @@ func (s *Store) CountSubscriptionsByPlan(ctx context.Context) (map[string]int, e
 	return result, rows.Err()
 }
 
+// ── Alt-account tables ────────────────────────────────────────────────────────
+
+type JoinLogEntry struct {
+	GuildID  string
+	UserID   string
+	Username string
+	JoinedAt time.Time
+}
+
+type BannedUserEntry struct {
+	GuildID  string
+	UserID   string
+	Username string
+	BannedAt time.Time
+}
+
+func (s *Store) AddJoinLog(ctx context.Context, guildID, userID, username string, joinedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO join_log (guild_id, user_id, username, joined_at)
+		VALUES ($1, $2, $3, $4)`,
+		guildID, userID, username, joinedAt.Unix())
+	return err
+}
+
+func (s *Store) GetRecentJoins(ctx context.Context, guildID string, limit int) ([]JoinLogEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT guild_id, user_id, username, joined_at
+		FROM join_log WHERE guild_id = $1
+		ORDER BY joined_at DESC LIMIT $2`,
+		guildID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []JoinLogEntry
+	for rows.Next() {
+		var e JoinLogEntry
+		var ts int64
+		if err := rows.Scan(&e.GuildID, &e.UserID, &e.Username, &ts); err != nil {
+			return nil, err
+		}
+		e.JoinedAt = time.Unix(ts, 0)
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+func (s *Store) AddBannedUser(ctx context.Context, guildID, userID, username string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO banned_users (guild_id, user_id, username, banned_at)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (guild_id, user_id) DO UPDATE SET
+			username  = EXCLUDED.username,
+			banned_at = EXCLUDED.banned_at`,
+		guildID, userID, username, time.Now().Unix())
+	return err
+}
+
+func (s *Store) GetRecentBannedUsers(ctx context.Context, guildID string, limit int) ([]BannedUserEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT guild_id, user_id, username, banned_at
+		FROM banned_users WHERE guild_id = $1
+		ORDER BY banned_at DESC LIMIT $2`,
+		guildID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []BannedUserEntry
+	for rows.Next() {
+		var e BannedUserEntry
+		var ts int64
+		if err := rows.Scan(&e.GuildID, &e.UserID, &e.Username, &ts); err != nil {
+			return nil, err
+		}
+		e.BannedAt = time.Unix(ts, 0)
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+// ── Shadow mutes ──────────────────────────────────────────────────────────────
+
+type ShadowMuteEntry struct {
+	ID        int64
+	GuildID   string
+	UserID    string
+	MutedBy   string
+	Reason    string
+	CreatedAt time.Time
+	ExpiresAt *time.Time // nil = permanent
+}
+
+func (s *Store) AddShadowMute(ctx context.Context, guildID, userID, mutedBy, reason string, expiresAt *time.Time) error {
+	var expiresUnix *int64
+	if expiresAt != nil {
+		v := expiresAt.Unix()
+		expiresUnix = &v
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO shadow_mutes (guild_id, user_id, muted_by, reason, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (guild_id, user_id) DO UPDATE SET
+			muted_by   = EXCLUDED.muted_by,
+			reason     = EXCLUDED.reason,
+			created_at = EXCLUDED.created_at,
+			expires_at = EXCLUDED.expires_at`,
+		guildID, userID, mutedBy, reason, time.Now().Unix(), expiresUnix)
+	return err
+}
+
+func (s *Store) RemoveShadowMute(ctx context.Context, guildID, userID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM shadow_mutes WHERE guild_id = $1 AND user_id = $2`,
+		guildID, userID)
+	return err
+}
+
+func (s *Store) IsShadowMuted(ctx context.Context, guildID, userID string) (bool, error) {
+	now := time.Now().Unix()
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM shadow_mutes
+		WHERE guild_id = $1 AND user_id = $2
+		AND (expires_at IS NULL OR expires_at > $3)`,
+		guildID, userID, now).Scan(&count)
+	return count > 0, err
+}
+
+func (s *Store) ListShadowMutes(ctx context.Context, guildID string) ([]ShadowMuteEntry, error) {
+	now := time.Now().Unix()
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, guild_id, user_id, muted_by, reason, created_at, expires_at
+		FROM shadow_mutes
+		WHERE guild_id = $1
+		AND (expires_at IS NULL OR expires_at > $2)
+		ORDER BY created_at DESC`,
+		guildID, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []ShadowMuteEntry
+	for rows.Next() {
+		var e ShadowMuteEntry
+		var createdAt int64
+		var expiresAt *int64
+		if err := rows.Scan(&e.ID, &e.GuildID, &e.UserID, &e.MutedBy, &e.Reason, &createdAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		e.CreatedAt = time.Unix(createdAt, 0)
+		if expiresAt != nil {
+			t := time.Unix(*expiresAt, 0)
+			e.ExpiresAt = &t
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+func (s *Store) CleanupExpiredShadowMutes(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM shadow_mutes WHERE expires_at IS NOT NULL AND expires_at <= $1`,
+		time.Now().Unix())
+	return err
+}
+
 // ── Escalation log ────────────────────────────────────────────────────────────
 
 func (s *Store) AddEscalationLog(ctx context.Context, guildID, userID, action string, score float64) error {
@@ -607,6 +775,76 @@ func (s *Store) GetLastEscalation(ctx context.Context, guildID, userID string) (
 		return time.Time{}, false, err
 	}
 	return time.Unix(ts, 0), true, nil
+}
+
+// ── Onboarding sessions ───────────────────────────────────────────────────────
+
+type OnboardingSession struct {
+	ID          int64
+	GuildID     string
+	UserID      string
+	CaptchaCode string
+	Attempts    int
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+	// Status: "pending_captcha", "pending_quiz", "verified", "failed"
+	Status string
+}
+
+func (s *Store) UpsertOnboardingSession(ctx context.Context, sess OnboardingSession) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO onboarding_sessions (guild_id, user_id, captcha_code, attempts, created_at, expires_at, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (guild_id, user_id) DO UPDATE SET
+			captcha_code = EXCLUDED.captcha_code,
+			attempts     = EXCLUDED.attempts,
+			created_at   = EXCLUDED.created_at,
+			expires_at   = EXCLUDED.expires_at,
+			status       = EXCLUDED.status`,
+		sess.GuildID, sess.UserID, sess.CaptchaCode, sess.Attempts,
+		sess.CreatedAt.Unix(), sess.ExpiresAt.Unix(), sess.Status)
+	return err
+}
+
+func (s *Store) GetOnboardingSession(ctx context.Context, guildID, userID string) (*OnboardingSession, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, guild_id, user_id, captcha_code, attempts, created_at, expires_at, status
+		FROM onboarding_sessions WHERE guild_id = $1 AND user_id = $2`,
+		guildID, userID)
+	var sess OnboardingSession
+	var createdAt, expiresAt int64
+	err := row.Scan(&sess.ID, &sess.GuildID, &sess.UserID, &sess.CaptchaCode,
+		&sess.Attempts, &createdAt, &expiresAt, &sess.Status)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	sess.CreatedAt = time.Unix(createdAt, 0)
+	sess.ExpiresAt = time.Unix(expiresAt, 0)
+	return &sess, nil
+}
+
+func (s *Store) UpdateOnboardingSession(ctx context.Context, guildID, userID, status string, attempts int) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE onboarding_sessions SET status = $1, attempts = $2
+		WHERE guild_id = $3 AND user_id = $4`,
+		status, attempts, guildID, userID)
+	return err
+}
+
+func (s *Store) DeleteOnboardingSession(ctx context.Context, guildID, userID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM onboarding_sessions WHERE guild_id = $1 AND user_id = $2`,
+		guildID, userID)
+	return err
+}
+
+func (s *Store) CleanupExpiredOnboardingSessions(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM onboarding_sessions WHERE expires_at < $1`, time.Now().Unix())
+	return err
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
