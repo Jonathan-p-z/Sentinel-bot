@@ -1,4 +1,4 @@
-# Sentinel Adaptive
+# Bastion
 
 > Defensive Discord security bot — risk scoring, trust engine, modular threat detection, and an optional web dashboard.
 
