@@ -1,12 +1,15 @@
 package antiphishing
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,14 +19,12 @@ import (
 	"sentinel-adaptive/internal/utils"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/likexian/whois"
-	whoisparser "github.com/likexian/whois-parser"
 	"golang.org/x/net/publicsuffix"
 )
 
 var keywordSignals = []string{"nitro", "free", "claim", "gift", "steam", "giveaway"}
 
-// dateLayouts lists the formats used by whois-parser for CreatedDate.
+// dateLayouts lists the formats commonly used in WHOIS responses for creation dates.
 var dateLayouts = []string{
 	"2006-01-02T15:04:05Z",
 	time.RFC3339,
@@ -31,6 +32,8 @@ var dateLayouts = []string{
 	"2006-01-02 15:04:05 UTC",
 	"2006-01-02",
 }
+
+var creationDateRe = regexp.MustCompile(`(?i)(?:creation ?date|created|domain registration date)\s*:\s*(\S+)`)
 
 // whoisCacheEntry stores the cached domain age score with a TTL.
 type whoisCacheEntry struct {
@@ -211,36 +214,26 @@ func (m *Module) checkWhoisAge(ctx context.Context, domain string) float64 {
 
 	// Wrap the blocking WHOIS call so the context timeout is respected.
 	type whoisResp struct {
-		data string
-		err  error
+		t   time.Time
+		err error
 	}
 	respCh := make(chan whoisResp, 1)
 	go func() {
-		data, err := whois.Whois(registrable)
-		respCh <- whoisResp{data, err}
+		t, err := whoisLookupCreationDate(context.Background(), registrable)
+		respCh <- whoisResp{t, err}
 	}()
 
 	whoisCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	var raw string
+	var createdAt time.Time
 	select {
 	case r := <-respCh:
 		if r.err != nil {
 			return 0
 		}
-		raw = r.data
+		createdAt = r.t
 	case <-whoisCtx.Done():
-		return 0
-	}
-
-	parsed, err := whoisparser.Parse(raw)
-	if err != nil || parsed.Domain == nil || parsed.Domain.CreatedDate == "" {
-		return 0
-	}
-
-	createdAt, ok := parseDomainDate(parsed.Domain.CreatedDate)
-	if !ok {
 		return 0
 	}
 
@@ -259,6 +252,68 @@ func (m *Module) checkWhoisAge(ctx context.Context, domain string) float64 {
 	m.whoisCacheMu.Unlock()
 
 	return score
+}
+
+// whoisQuery opens a TCP connection to server:43, sends query\r\n, and returns
+// the full response. Respects any deadline set on ctx.
+func whoisQuery(ctx context.Context, server, query string) (string, error) {
+	d := net.Dialer{}
+	conn, err := d.DialContext(ctx, "tcp", server+":43")
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	if _, err = fmt.Fprintf(conn, "%s\r\n", query); err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		sb.WriteString(scanner.Text())
+		sb.WriteByte('\n')
+	}
+	return sb.String(), scanner.Err()
+}
+
+// whoisLookupCreationDate resolves the correct WHOIS server via IANA, queries
+// it for domain, and returns the parsed creation date.
+func whoisLookupCreationDate(ctx context.Context, domain string) (time.Time, error) {
+	// Step 1: ask IANA for the TLD's WHOIS server.
+	ianaResp, err := whoisQuery(ctx, "whois.iana.org", domain)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var server string
+	for _, line := range strings.Split(ianaResp, "\n") {
+		lower := strings.TrimSpace(strings.ToLower(line))
+		if after, ok := strings.CutPrefix(lower, "refer:"); ok {
+			server = strings.TrimSpace(after)
+			break
+		}
+	}
+	if server == "" {
+		return time.Time{}, fmt.Errorf("no WHOIS server found for %s", domain)
+	}
+
+	// Step 2: query the TLD's WHOIS server.
+	resp, err := whoisQuery(ctx, server, domain)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	// Step 3: extract creation date via regex.
+	m := creationDateRe.FindStringSubmatch(resp)
+	if m == nil {
+		return time.Time{}, fmt.Errorf("creation date not found in WHOIS response")
+	}
+	t, ok := parseDomainDate(m[1])
+	if !ok {
+		return time.Time{}, fmt.Errorf("cannot parse date %q", m[1])
+	}
+	return t, nil
 }
 
 // checkSafeBrowsing queries the Google Safe Browsing v4 API.
