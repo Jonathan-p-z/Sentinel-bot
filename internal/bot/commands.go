@@ -559,6 +559,15 @@ func (b *Bot) registerCommands() error {
 				discordgo.SpanishES: "Flujo de verificacion",
 			},
 		},
+		{
+			Name:        "ticket",
+			Description: "Open a support ticket",
+			DescriptionLocalizations: &map[discordgo.Locale]string{
+				discordgo.French:    "Ouvrir un ticket de support",
+				discordgo.EnglishUS: "Open a support ticket",
+				discordgo.SpanishES: "Abrir un ticket de soporte",
+			},
+		},
 	}
 
 	appID := b.session.State.User.ID

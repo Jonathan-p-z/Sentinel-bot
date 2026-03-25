@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,7 +46,14 @@ func main() {
 		logger.Fatal("storage init failed", zap.Error(err))
 	}
 	defer store.Close()
-	if err := store.Migrate(); err != nil {
+	if steps, ok := parseDownArg(); ok {
+		if err := store.MigrateDown(steps); err != nil {
+			logger.Fatal("migration rollback failed", zap.Error(err), zap.Int("steps", steps))
+		}
+		logger.Info("rollback complete", zap.Int("steps", steps))
+		return
+	}
+	if err := store.MigrateUp(); err != nil {
 		logger.Fatal("migrations failed", zap.Error(err))
 	}
 
@@ -119,4 +128,29 @@ func main() {
 		_ = dashServer.Shutdown(ctx)
 	}
 	botSvc.Close(ctx)
+}
+
+// parseDownArg parses --down N or --down=N from os.Args.
+// Returns (steps, true) if the flag is present, (0, false) otherwise.
+// If N is missing or invalid, defaults to 1.
+func parseDownArg() (int, bool) {
+	args := os.Args[1:]
+	for i, arg := range args {
+		switch {
+		case arg == "--down":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					return n, true
+				}
+			}
+			return 1, true
+		case strings.HasPrefix(arg, "--down="):
+			n, err := strconv.Atoi(arg[len("--down="):])
+			if err == nil && n > 0 {
+				return n, true
+			}
+			return 1, true
+		}
+	}
+	return 0, false
 }

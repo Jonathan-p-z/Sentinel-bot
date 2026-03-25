@@ -1,0 +1,11 @@
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_enabled;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_window_seconds;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_channel_delete;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_channel_create;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_channel_update;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_role_delete;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_role_create;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_role_update;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_webhook_update;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_ban_add;
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS nuke_guild_update;

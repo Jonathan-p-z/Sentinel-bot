@@ -14,7 +14,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-//go:embed migrations/*.sql
+//go:embed migrations
 var migrations embed.FS
 
 type Store struct {
@@ -109,37 +109,161 @@ func (s *Store) Close() {
 	}
 }
 
+func (s *Store) ensureMigrationsTable() error {
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    TEXT   PRIMARY KEY,
+			applied_at BIGINT NOT NULL
+		)`)
+	return err
+}
+
+func (s *Store) appliedVersionSet() (map[string]struct{}, error) {
+	rows, err := s.db.Query(`SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	applied := make(map[string]struct{})
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		applied[v] = struct{}{}
+	}
+	return applied, rows.Err()
+}
+
+func (s *Store) lastAppliedVersions(n int) ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT version FROM schema_migrations
+		ORDER BY applied_at DESC, version DESC
+		LIMIT $1`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var versions []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		versions = append(versions, v)
+	}
+	return versions, rows.Err()
+}
+
+// Migrate is a backward-compatible alias for MigrateUp.
 func (s *Store) Migrate() error {
+	return s.MigrateUp()
+}
+
+// MigrateUp applies all pending *.up.sql migrations in version order.
+// It records each applied migration in schema_migrations to avoid re-runs.
+func (s *Store) MigrateUp() error {
+	if err := s.ensureMigrationsTable(); err != nil {
+		return fmt.Errorf("ensure migrations table: %w", err)
+	}
+	applied, err := s.appliedVersionSet()
+	if err != nil {
+		return fmt.Errorf("read applied migrations: %w", err)
+	}
+
 	entries, err := migrations.ReadDir("migrations")
 	if err != nil {
 		return err
 	}
 
-	var files []string
-	for _, entry := range entries {
-		files = append(files, entry.Name())
+	var upFiles []string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".up.sql") {
+			upFiles = append(upFiles, e.Name())
+		}
 	}
-	sort.Strings(files)
+	sort.Strings(upFiles)
 
-	for _, file := range files {
-		content, err := migrations.ReadFile(path.Join("migrations", file))
-		if err != nil {
+	for _, file := range upFiles {
+		version := migrationVersion(file)
+		if _, ok := applied[version]; ok {
+			continue // already applied
+		}
+		if err := s.execMigrationFile(file); err != nil {
 			return err
 		}
-		for _, stmt := range splitStatements(string(content)) {
-			stmt = strings.TrimSpace(stmt)
-			if stmt == "" {
-				continue
-			}
-			if _, err := s.db.Exec(stmt); err != nil {
-				if isIgnorableMigrationError(err) {
-					continue
-				}
-				return fmt.Errorf("migration %s failed: %w", file, err)
-			}
+		if _, err := s.db.Exec(
+			`INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)`,
+			version, time.Now().Unix(),
+		); err != nil {
+			return fmt.Errorf("record migration %s: %w", version, err)
 		}
 	}
 	return nil
+}
+
+// MigrateDown rolls back the last `steps` applied migrations using *.down.sql files.
+func (s *Store) MigrateDown(steps int) error {
+	if steps <= 0 {
+		steps = 1
+	}
+	if err := s.ensureMigrationsTable(); err != nil {
+		return fmt.Errorf("ensure migrations table: %w", err)
+	}
+	toRollback, err := s.lastAppliedVersions(steps)
+	if err != nil {
+		return fmt.Errorf("read applied migrations: %w", err)
+	}
+	for _, version := range toRollback {
+		file := version + ".down.sql"
+		if err := s.execMigrationFile(file); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(
+			`DELETE FROM schema_migrations WHERE version = $1`, version,
+		); err != nil {
+			return fmt.Errorf("remove migration record %s: %w", version, err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) execMigrationFile(filename string) error {
+	content, err := migrations.ReadFile(path.Join("migrations", filename))
+	if err != nil {
+		return fmt.Errorf("read migration file %s: %w", filename, err)
+	}
+	for _, stmt := range splitStatements(string(content)) {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" || isCommentOnly(stmt) {
+			continue
+		}
+		if _, err := s.db.Exec(stmt); err != nil {
+			if isIgnorableMigrationError(err) {
+				continue
+			}
+			return fmt.Errorf("migration %s failed: %w", filename, err)
+		}
+	}
+	return nil
+}
+
+func migrationVersion(filename string) string {
+	v := strings.TrimSuffix(filename, ".sql")
+	v = strings.TrimSuffix(v, ".up")
+	v = strings.TrimSuffix(v, ".down")
+	return v
+}
+
+func isCommentOnly(stmt string) bool {
+	for _, line := range strings.Split(stmt, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "--") {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func splitStatements(sql string) []string {
@@ -857,6 +981,94 @@ func (s *Store) CleanupExpiredOnboardingSessions(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM onboarding_sessions WHERE expires_at < $1`, time.Now().Unix())
 	return err
+}
+
+// ── Tickets ───────────────────────────────────────────────────────────────────
+
+type Ticket struct {
+	ID        int64
+	GuildID   string
+	UserID    string
+	ChannelID string
+	Status    string // "open" | "closed"
+	CreatedAt time.Time
+	ClosedAt  *time.Time // nil when open
+}
+
+func (s *Store) CreateTicket(ctx context.Context, guildID, userID, channelID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO tickets (guild_id, user_id, channel_id, status, created_at)
+		VALUES ($1, $2, $3, 'open', $4)`,
+		guildID, userID, channelID, time.Now().Unix())
+	return err
+}
+
+// GetOpenTicket returns the open ticket for a user on a guild, or nil if none.
+func (s *Store) GetOpenTicket(ctx context.Context, guildID, userID string) (*Ticket, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, guild_id, user_id, channel_id, status, created_at, closed_at
+		FROM tickets
+		WHERE guild_id = $1 AND user_id = $2 AND status = 'open'
+		LIMIT 1`,
+		guildID, userID)
+	var t Ticket
+	var createdAt int64
+	var closedAt int64
+	err := row.Scan(&t.ID, &t.GuildID, &t.UserID, &t.ChannelID, &t.Status, &createdAt, &closedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	t.CreatedAt = time.Unix(createdAt, 0)
+	if closedAt != 0 {
+		v := time.Unix(closedAt, 0)
+		t.ClosedAt = &v
+	}
+	return &t, nil
+}
+
+// CountOpenTickets returns the number of currently open tickets for a guild.
+func (s *Store) CountOpenTickets(ctx context.Context, guildID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM tickets WHERE guild_id = $1 AND status = 'open'`,
+		guildID).Scan(&n)
+	return n, err
+}
+
+// CloseTicket marks the ticket for the given channel as closed.
+func (s *Store) CloseTicket(ctx context.Context, channelID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE tickets SET status = 'closed', closed_at = $1
+		WHERE channel_id = $2 AND status = 'open'`,
+		time.Now().Unix(), channelID)
+	return err
+}
+
+// GetTicketByChannel returns the ticket associated with a given channel ID.
+func (s *Store) GetTicketByChannel(ctx context.Context, channelID string) (*Ticket, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, guild_id, user_id, channel_id, status, created_at, closed_at
+		FROM tickets WHERE channel_id = $1 LIMIT 1`,
+		channelID)
+	var t Ticket
+	var createdAt int64
+	var closedAt int64
+	err := row.Scan(&t.ID, &t.GuildID, &t.UserID, &t.ChannelID, &t.Status, &createdAt, &closedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	t.CreatedAt = time.Unix(createdAt, 0)
+	if closedAt != 0 {
+		v := time.Unix(closedAt, 0)
+		t.ClosedAt = &v
+	}
+	return &t, nil
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

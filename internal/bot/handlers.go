@@ -32,11 +32,24 @@ func interactionActorName(interaction *discordgo.InteractionCreate) string {
 }
 
 func (b *Bot) onInteractionCreate(session *discordgo.Session, interaction *discordgo.InteractionCreate) {
+	ctx := context.Background()
+
+	// Handle message component interactions (buttons).
+	if interaction.Type == discordgo.InteractionMessageComponent {
+		data := interaction.MessageComponentData()
+		switch data.CustomID {
+		case "ticket_close":
+			b.handleTicketClose(ctx, session, interaction)
+		case "ticket_help":
+			b.handleTicketHelp(ctx, session, interaction)
+		}
+		return
+	}
+
 	if interaction.Type != discordgo.InteractionApplicationCommand {
 		return
 	}
 
-	ctx := context.Background()
 	data := interaction.ApplicationCommandData()
 	switch data.Name {
 	case "status", "mode", "preset", "lockdown", "rules", "domain", "report", "language", "test", "logs", "risk", "whitelist", "nuke":
@@ -50,6 +63,8 @@ func (b *Bot) onInteractionCreate(session *discordgo.Session, interaction *disco
 			lang = b.guildSettings(ctx, interaction.GuildID).Language
 		}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "verify_title"), b.t(lang, "verify_requested"), b.cfg.Notifications.EmbedColors.Action, nil), true)
+	case "ticket":
+		b.handleTicketCommand(ctx, session, interaction)
 	}
 }
 

@@ -1,0 +1,4 @@
+-- This migration converted INTEGER columns to BOOLEAN using USING casts.
+-- Reversing a type change is not safely automatable: data may not round-trip cleanly.
+-- No destructive operation is performed here.
+-- To rollback manually, restore a database backup taken before this migration was applied.
