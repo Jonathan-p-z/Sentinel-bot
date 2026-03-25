@@ -109,6 +109,21 @@ func CreateTicketChannel(session *discordgo.Session, guildID, categoryID, userID
 		return nil, fmt.Errorf("set owner overwrite: %w", err)
 	}
 
+	// Bot: allow ViewChannel + SendMessages + ReadMessageHistory + ManageChannels.
+	// Required because @everyone deny removes the bot from the channel too (unless Administrator).
+	if session.State != nil && session.State.User != nil {
+		botID := session.State.User.ID
+		if err := session.ChannelPermissionSet(
+			ch.ID, botID,
+			discordgo.PermissionOverwriteTypeMember,
+			discordgo.PermissionViewChannel|discordgo.PermissionSendMessages|discordgo.PermissionReadMessageHistory|discordgo.PermissionManageChannels,
+			0,
+		); err != nil {
+			_, _ = session.ChannelDelete(ch.ID)
+			return nil, fmt.Errorf("set bot overwrite: %w", err)
+		}
+	}
+
 	return ch, nil
 }
 
