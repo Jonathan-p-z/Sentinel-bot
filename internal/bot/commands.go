@@ -567,6 +567,41 @@ func (b *Bot) registerCommands() error {
 				discordgo.EnglishUS: "Open a support ticket",
 				discordgo.SpanishES: "Abrir un ticket de soporte",
 			},
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "open",
+					Description: "Open a support ticket",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "Ouvrir un ticket de support",
+						discordgo.EnglishUS: "Open a support ticket",
+						discordgo.SpanishES: "Abrir un ticket de soporte",
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "setup",
+					Description: "Set the category where ticket channels are created",
+					DescriptionLocalizations: map[discordgo.Locale]string{
+						discordgo.French:    "Définir la catégorie des salons tickets",
+						discordgo.EnglishUS: "Set the category where ticket channels are created",
+						discordgo.SpanishES: "Definir la categoría de los canales de tickets",
+					},
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:        discordgo.ApplicationCommandOptionString,
+							Name:        "category_id",
+							Description: "Discord category ID",
+							DescriptionLocalizations: map[discordgo.Locale]string{
+								discordgo.French:    "ID de la catégorie Discord",
+								discordgo.EnglishUS: "Discord category ID",
+								discordgo.SpanishES: "ID de la categoría de Discord",
+							},
+							Required: true,
+						},
+					},
+				},
+			},
 		},
 	}
 

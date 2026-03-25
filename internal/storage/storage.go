@@ -49,6 +49,8 @@ type GuildSettings struct {
 	// Auto-provisioned per-guild IDs.
 	OnboardingRoleID       string
 	ShadowmuteLogChannelID string
+
+	TicketCategoryID string
 }
 
 type AuditLog struct {
@@ -280,7 +282,7 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 		nuke_enabled, nuke_window_seconds, nuke_channel_delete, nuke_channel_create,
 		nuke_channel_update, nuke_role_delete, nuke_role_create, nuke_role_update,
 		nuke_webhook_update, nuke_ban_add, nuke_guild_update,
-		onboarding_role_id, shadowmute_log_channel_id
+		onboarding_role_id, shadowmute_log_channel_id, ticket_category_id
 		FROM guild_settings WHERE guild_id = $1`, guildID)
 
 	result := defaults
@@ -311,6 +313,7 @@ func (s *Store) GetGuildSettings(ctx context.Context, guildID string, defaults G
 		&result.NukeGuildUpdate,
 		&result.OnboardingRoleID,
 		&result.ShadowmuteLogChannelID,
+		&result.TicketCategoryID,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -333,8 +336,8 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 			nuke_enabled, nuke_window_seconds, nuke_channel_delete, nuke_channel_create,
 			nuke_channel_update, nuke_role_delete, nuke_role_create, nuke_role_update,
 			nuke_webhook_update, nuke_ban_add, nuke_guild_update,
-			onboarding_role_id, shadowmute_log_channel_id
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+			onboarding_role_id, shadowmute_log_channel_id, ticket_category_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
 		ON CONFLICT(guild_id) DO UPDATE SET
 			security_log_channel = EXCLUDED.security_log_channel,
 			language = EXCLUDED.language,
@@ -359,7 +362,8 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 			nuke_ban_add = EXCLUDED.nuke_ban_add,
 			nuke_guild_update = EXCLUDED.nuke_guild_update,
 			onboarding_role_id = EXCLUDED.onboarding_role_id,
-			shadowmute_log_channel_id = EXCLUDED.shadowmute_log_channel_id`,
+			shadowmute_log_channel_id = EXCLUDED.shadowmute_log_channel_id,
+			ticket_category_id = EXCLUDED.ticket_category_id`,
 		settings.GuildID,
 		settings.SecurityLogChannel,
 		settings.Language,
@@ -385,7 +389,17 @@ func (s *Store) UpsertGuildSettings(ctx context.Context, settings GuildSettings)
 		settings.NukeGuildUpdate,
 		settings.OnboardingRoleID,
 		settings.ShadowmuteLogChannelID,
+		settings.TicketCategoryID,
 	)
+	return err
+}
+
+func (s *Store) SetTicketCategoryID(ctx context.Context, guildID, categoryID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO guild_settings (guild_id, ticket_category_id)
+		VALUES ($1, $2)
+		ON CONFLICT(guild_id) DO UPDATE SET ticket_category_id = EXCLUDED.ticket_category_id`,
+		guildID, categoryID)
 	return err
 }
 

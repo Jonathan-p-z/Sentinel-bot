@@ -6,11 +6,8 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
-// tierLimits defines the maximum number of simultaneous open tickets per guild plan.
 var tierLimits = map[string]int{
 	"free":       3,
 	"pro":        10,
@@ -18,8 +15,6 @@ var tierLimits = map[string]int{
 	"enterprise": 50,
 }
 
-// TierLimit returns the ticket limit for a given plan name.
-// Defaults to the free limit for unknown plans.
 func TierLimit(plan string) int {
 	if limit, ok := tierLimits[plan]; ok {
 		return limit
@@ -27,60 +22,25 @@ func TierLimit(plan string) int {
 	return tierLimits["free"]
 }
 
-const (
-	categoryName = "📩 Tickets"
-	logChannel   = "ticket-logs"
-)
+const logChannel = "ticket-logs"
 
-// EnsureCategory returns the ID of the "📩 Tickets" category for the guild,
-// creating it (invisible to @everyone) if it does not exist.
-// The bot receives an explicit ManageRoles overwrite on the category so it can
-// set permission overwrites on child channels without hitting Discord's 50013.
-func EnsureCategory(session *discordgo.Session, guildID string) (string, error) {
+func FindTicketCategory(session *discordgo.Session, guildID string) string {
 	channels, err := session.GuildChannels(guildID)
 	if err != nil {
-		return "", fmt.Errorf("list channels: %w", err)
+		return ""
 	}
-
 	for _, ch := range channels {
-		if ch.Type == discordgo.ChannelTypeGuildCategory && ch.Name == categoryName {
-			return ch.ID, nil
+		if ch.Type != discordgo.ChannelTypeGuildCategory {
+			continue
+		}
+		lower := strings.ToLower(ch.Name)
+		if strings.Contains(lower, "ticket") || strings.Contains(lower, "staff") {
+			return ch.ID
 		}
 	}
-
-	botID := session.State.User.ID
-
-	perms := []*discordgo.PermissionOverwrite{
-		// @everyone: deny view so the category and its children are hidden by default.
-		{
-			ID:   guildID,
-			Type: discordgo.PermissionOverwriteTypeRole,
-			Deny: discordgo.PermissionViewChannel,
-		},
-		// Bot: explicit allow so it has ViewChannel + ManageChannels + ManageRoles
-		// in the category context, which Discord requires to set overwrites on child channels.
-		{
-			ID:   botID,
-			Type: discordgo.PermissionOverwriteTypeMember,
-			Allow: discordgo.PermissionViewChannel |
-				discordgo.PermissionManageChannels |
-				discordgo.PermissionManageRoles,
-		},
-	}
-
-	cat, err := session.GuildChannelCreateComplex(guildID, discordgo.GuildChannelCreateData{
-		Name:                 categoryName,
-		Type:                 discordgo.ChannelTypeGuildCategory,
-		PermissionOverwrites: perms,
-	})
-	if err != nil {
-		return "", fmt.Errorf("create category: %w", err)
-	}
-	return cat.ID, nil
+	return ""
 }
 
-// EnsureLogChannel returns the ID of #ticket-logs for the guild, creating it
-// (staff-only via ManageGuild permission) if it does not exist.
 func EnsureLogChannel(session *discordgo.Session, guildID string) (string, error) {
 	channels, err := session.GuildChannels(guildID)
 	if err != nil {
@@ -93,7 +53,6 @@ func EnsureLogChannel(session *discordgo.Session, guildID string) (string, error
 		}
 	}
 
-	// Hidden from @everyone, visible only to roles with ManageGuild.
 	perms := []*discordgo.PermissionOverwrite{
 		{
 			ID:   guildID,
@@ -113,68 +72,46 @@ func EnsureLogChannel(session *discordgo.Session, guildID string) (string, error
 	return ch.ID, nil
 }
 
-// CreateTicketChannel creates a ticket text channel inside the tickets category.
-// Staff visibility is inherited from the category permissions; only two explicit
-// overwrites are added: @everyone deny, and the ticket owner allow.
-func CreateTicketChannel(session *discordgo.Session, guildID, categoryID, userID, username string, logger *zap.Logger) (*discordgo.Channel, error) {
+func CreateTicketChannel(session *discordgo.Session, guildID, categoryID, userID, username string) (*discordgo.Channel, error) {
 	name := "ticket-" + sanitizeUsername(username)
 
-	perms := []*discordgo.PermissionOverwrite{
-		// @everyone: deny view — channel is hidden by default.
-		{
-			ID:   guildID,
-			Type: discordgo.PermissionOverwriteTypeRole,
-			Deny: discordgo.PermissionViewChannel,
-		},
-		// Ticket owner: allow view + send + history.
-		{
-			ID:    userID,
-			Type:  discordgo.PermissionOverwriteTypeMember,
-			Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory,
-		},
+	data := discordgo.GuildChannelCreateData{
+		Name: name,
+		Type: discordgo.ChannelTypeGuildText,
+	}
+	if categoryID != "" {
+		data.ParentID = categoryID
 	}
 
-	botID := ""
-	if session.State != nil && session.State.User != nil {
-		botID = session.State.User.ID
-	}
-
-	logger.Info("ticket channel create — pre-API call",
-		zap.String("guild_id", guildID),
-		zap.String("category_id", categoryID),
-		zap.String("bot_id", botID),
-		zap.String("owner_id", userID),
-		zap.String("channel_name", name),
-		zap.Array("overwrites", zapOverwrites(perms)),
-	)
-
-	ch, err := session.GuildChannelCreateComplex(guildID, discordgo.GuildChannelCreateData{
-		Name:                 name,
-		Type:                 discordgo.ChannelTypeGuildText,
-		ParentID:             categoryID,
-		PermissionOverwrites: perms,
-	})
+	ch, err := session.GuildChannelCreateComplex(guildID, data)
 	if err != nil {
 		return nil, fmt.Errorf("create ticket channel: %w", err)
 	}
+
+	// @everyone: deny ViewChannel.
+	if err := session.ChannelPermissionSet(
+		ch.ID, guildID,
+		discordgo.PermissionOverwriteTypeRole,
+		0, discordgo.PermissionViewChannel,
+	); err != nil {
+		_, _ = session.ChannelDelete(ch.ID)
+		return nil, fmt.Errorf("set @everyone overwrite: %w", err)
+	}
+
+	// Ticket owner: allow ViewChannel + SendMessages + ReadMessageHistory.
+	if err := session.ChannelPermissionSet(
+		ch.ID, userID,
+		discordgo.PermissionOverwriteTypeMember,
+		discordgo.PermissionViewChannel|discordgo.PermissionSendMessages|discordgo.PermissionReadMessageHistory,
+		0,
+	); err != nil {
+		_, _ = session.ChannelDelete(ch.ID)
+		return nil, fmt.Errorf("set owner overwrite: %w", err)
+	}
+
 	return ch, nil
 }
 
-// zapOverwrites implements zap.ArrayMarshaler to log permission overwrites.
-type zapOverwrites []*discordgo.PermissionOverwrite
-
-func (z zapOverwrites) MarshalLogArray(enc zapcore.ArrayEncoder) error {
-	for _, o := range z {
-		t := "role"
-		if o.Type == discordgo.PermissionOverwriteTypeMember {
-			t = "member"
-		}
-		enc.AppendString(fmt.Sprintf("{id:%s type:%s allow:%d deny:%d}", o.ID, t, o.Allow, o.Deny))
-	}
-	return nil
-}
-
-// SendWelcomeMessage posts the welcome embed with action buttons into the ticket channel.
 func SendWelcomeMessage(session *discordgo.Session, channelID, userID, lang string) error {
 	mention := fmt.Sprintf("<@%s>", userID)
 
@@ -216,8 +153,6 @@ func SendWelcomeMessage(session *discordgo.Session, channelID, userID, lang stri
 	return err
 }
 
-// GenerateTranscript fetches up to 100 messages from the channel and formats
-// them as a plain-text transcript.
 func GenerateTranscript(session *discordgo.Session, channelID string) string {
 	msgs, err := session.ChannelMessages(channelID, 100, "", "", "")
 	if err != nil || len(msgs) == 0 {
@@ -238,10 +173,8 @@ func GenerateTranscript(session *discordgo.Session, channelID string) string {
 	return sb.String()
 }
 
-// PostTranscript posts the transcript text to the log channel.
 func PostTranscript(session *discordgo.Session, logChannelID, ticketChannelName, transcript string) {
 	header := fmt.Sprintf("**Transcript — #%s**\n", ticketChannelName)
-	// Discord message limit is 2000 chars; split if needed.
 	full := header + "```\n" + transcript + "\n```"
 	if len(full) <= 2000 {
 		_, _ = session.ChannelMessageSend(logChannelID, full)
@@ -253,8 +186,6 @@ func PostTranscript(session *discordgo.Session, logChannelID, ticketChannelName,
 		_, _ = session.ChannelMessageSend(logChannelID, "```\n"+chunk+"\n```")
 	}
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 func sanitizeUsername(username string) string {
 	lower := strings.ToLower(username)

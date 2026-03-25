@@ -10,7 +10,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// handleTicketCommand handles the /ticket slash command.
 func (b *Bot) handleTicketCommand(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) {
 	if interaction.GuildID == "" {
 		b.respondEmbed(session, interaction,
@@ -33,7 +32,6 @@ func (b *Bot) handleTicketCommand(ctx context.Context, session *discordgo.Sessio
 		return
 	}
 
-	// 1. Check for existing open ticket.
 	existing, err := b.store.GetOpenTicket(ctx, interaction.GuildID, userID)
 	if err != nil {
 		b.logger.Sugar().Errorw("get open ticket", "err", err)
@@ -50,7 +48,6 @@ func (b *Bot) handleTicketCommand(ctx context.Context, session *discordgo.Sessio
 		return
 	}
 
-	// 2. Check tier limit.
 	sub, err := b.store.GetSubscription(ctx, interaction.GuildID)
 	plan := "free"
 	if err == nil && sub != nil && sub.Plan != "" {
@@ -75,23 +72,17 @@ func (b *Bot) handleTicketCommand(ctx context.Context, session *discordgo.Sessio
 		return
 	}
 
-	// 3. Ensure "📩 Tickets" category exists.
-	categoryID, err := tickets.EnsureCategory(session, interaction.GuildID)
-	if err != nil {
-		b.logger.Sugar().Errorw("ensure ticket category", "err", err)
-		b.respondEmbed(session, interaction,
-			b.commandEmbed(b.t(lang, "ticket_title"), b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil),
-			true)
-		return
+	categoryID := settings.TicketCategoryID
+	if categoryID == "" {
+		categoryID = tickets.FindTicketCategory(session, interaction.GuildID)
 	}
 
-	// 4. Create ticket channel.
 	username := interactionActorName(interaction)
 	if interaction.Member != nil && interaction.Member.User != nil {
 		username = interaction.Member.User.Username
 	}
 
-	ch, err := tickets.CreateTicketChannel(session, interaction.GuildID, categoryID, userID, username, b.logger)
+	ch, err := tickets.CreateTicketChannel(session, interaction.GuildID, categoryID, userID, username)
 	if err != nil {
 		b.logger.Sugar().Errorw("create ticket channel", "err", err)
 		b.respondEmbed(session, interaction,
@@ -100,7 +91,6 @@ func (b *Bot) handleTicketCommand(ctx context.Context, session *discordgo.Sessio
 		return
 	}
 
-	// 5. Persist the ticket in DB.
 	if err := b.store.CreateTicket(ctx, interaction.GuildID, userID, ch.ID); err != nil {
 		b.logger.Sugar().Errorw("persist ticket", "err", err)
 		// Best-effort cleanup: delete the Discord channel we just created.
@@ -111,7 +101,6 @@ func (b *Bot) handleTicketCommand(ctx context.Context, session *discordgo.Sessio
 		return
 	}
 
-	// 6. Send welcome message with buttons.
 	if err := tickets.SendWelcomeMessage(session, ch.ID, userID, lang); err != nil {
 		b.logger.Sugar().Warnw("send ticket welcome", "err", err)
 	}
@@ -119,14 +108,12 @@ func (b *Bot) handleTicketCommand(ctx context.Context, session *discordgo.Sessio
 	b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, userID, "ticket_open",
 		fmt.Sprintf("channel=%s", ch.ID))
 
-	// 7. Respond ephemerally with the channel mention.
 	msg := fmt.Sprintf(b.t(lang, "ticket_created"), ch.ID)
 	b.respondEmbed(session, interaction,
 		b.commandEmbed(b.t(lang, "ticket_title"), msg, b.cfg.Notifications.EmbedColors.Action, nil),
 		true)
 }
 
-// handleTicketClose handles the "🔒 Fermer le ticket" button.
 func (b *Bot) handleTicketClose(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) {
 	settings := b.guildSettings(ctx, interaction.GuildID)
 	lang := settings.Language
@@ -137,7 +124,6 @@ func (b *Bot) handleTicketClose(ctx context.Context, session *discordgo.Session,
 	channelID := interaction.ChannelID
 	actorID := interactionActorID(interaction)
 
-	// Retrieve the ticket to know the owner.
 	ticket, err := b.store.GetTicketByChannel(ctx, channelID)
 	if err != nil || ticket == nil {
 		b.respondEmbed(session, interaction,
@@ -146,7 +132,6 @@ func (b *Bot) handleTicketClose(ctx context.Context, session *discordgo.Session,
 		return
 	}
 
-	// Only the ticket owner or a staff member (ManageGuild) may close.
 	isOwner := actorID == ticket.UserID
 	isStaff := interaction.Member != nil &&
 		interaction.Member.Permissions&discordgo.PermissionManageServer != 0
@@ -158,7 +143,6 @@ func (b *Bot) handleTicketClose(ctx context.Context, session *discordgo.Session,
 		return
 	}
 
-	// Acknowledge immediately so Discord doesn't show "interaction failed".
 	_ = session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
@@ -166,17 +150,14 @@ func (b *Bot) handleTicketClose(ctx context.Context, session *discordgo.Session,
 		},
 	})
 
-	// Fetch channel name before deleting it.
 	ch, _ := session.Channel(channelID)
 	channelName := channelID
 	if ch != nil {
 		channelName = ch.Name
 	}
 
-	// Generate transcript.
 	transcript := tickets.GenerateTranscript(session, channelID)
 
-	// Post transcript to #ticket-logs.
 	logChannelID, err := tickets.EnsureLogChannel(session, interaction.GuildID)
 	if err != nil {
 		b.logger.Sugar().Warnw("ensure log channel", "err", err)
@@ -184,7 +165,6 @@ func (b *Bot) handleTicketClose(ctx context.Context, session *discordgo.Session,
 		tickets.PostTranscript(session, logChannelID, channelName, transcript)
 	}
 
-	// Mark as closed in DB.
 	if err := b.store.CloseTicket(ctx, channelID); err != nil {
 		b.logger.Sugar().Errorw("close ticket db", "err", err)
 	}
@@ -192,12 +172,9 @@ func (b *Bot) handleTicketClose(ctx context.Context, session *discordgo.Session,
 	b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, actorID, "ticket_close",
 		fmt.Sprintf("channel=%s owner=%s", channelID, ticket.UserID))
 
-	// Delete the ticket channel.
 	_, _ = session.ChannelDelete(channelID)
 }
 
-// handleTicketHelp handles the "📋 Comment bien décrire ton problème" button.
-// It sends an ephemeral message with tips.
 func (b *Bot) handleTicketHelp(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) {
 	_ = ctx
 	settings := b.guildSettings(ctx, interaction.GuildID)
@@ -220,4 +197,51 @@ func (b *Bot) handleTicketHelp(ctx context.Context, session *discordgo.Session, 
 			Flags: discordgo.MessageFlagsEphemeral,
 		},
 	})
+}
+
+func (b *Bot) handleTicketSetup(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) {
+	if interaction.GuildID == "" {
+		b.respondEmbed(session, interaction,
+			b.commandEmbed(b.t("fr", "ticket_title"), b.t("fr", "error_only_guild"), b.cfg.Notifications.EmbedColors.Error, nil),
+			true)
+		return
+	}
+
+	settings := b.guildSettings(ctx, interaction.GuildID)
+	lang := settings.Language
+	if lang == "" {
+		lang = b.cfg.DefaultLanguage
+	}
+
+	if interaction.Member == nil || interaction.Member.Permissions&discordgo.PermissionManageServer == 0 {
+		b.respondEmbed(session, interaction,
+			b.commandEmbed(b.t(lang, "ticket_title"), b.t(lang, "error_no_permission"), b.cfg.Notifications.EmbedColors.Error, nil),
+			true)
+		return
+	}
+
+	opts := interaction.ApplicationCommandData().Options
+	if len(opts) == 0 || len(opts[0].Options) == 0 {
+		b.respondEmbed(session, interaction,
+			b.commandEmbed(b.t(lang, "ticket_title"), b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil),
+			true)
+		return
+	}
+	categoryID := opts[0].Options[0].StringValue()
+
+	if err := b.store.SetTicketCategoryID(ctx, interaction.GuildID, categoryID); err != nil {
+		b.logger.Sugar().Errorw("set ticket category", "err", err)
+		b.respondEmbed(session, interaction,
+			b.commandEmbed(b.t(lang, "ticket_title"), b.t(lang, "error_failed"), b.cfg.Notifications.EmbedColors.Error, nil),
+			true)
+		return
+	}
+
+	b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, interactionActorID(interaction), "ticket_setup",
+		fmt.Sprintf("category=%s", categoryID))
+
+	msg := fmt.Sprintf(b.t(lang, "ticket_setup_ok"), categoryID)
+	b.respondEmbed(session, interaction,
+		b.commandEmbed(b.t(lang, "ticket_title"), msg, b.cfg.Notifications.EmbedColors.Action, nil),
+		true)
 }

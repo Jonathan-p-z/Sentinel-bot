@@ -1,0 +1,41 @@
+{{define "content"}}
+{{block "breadcrumb" .}}
+<a href="/app">Serveurs</a>
+<span class="sep">/</span>
+<a href="/app/guild?id={{.Guild.ID}}">{{.Guild.Name}}</a>
+<span class="sep">/</span>
+<span class="current">Configuration</span>
+{{end}}
+
+<div class="page-header">
+  <div class="page-title">Configuration du serveur</div>
+  <div class="page-subtitle">Paramètres spécifiques à ce serveur.</div>
+</div>
+
+{{if .Saved}}
+<div class="alert alert-success mb-6">Configuration sauvegardée.</div>
+{{end}}
+{{if .Error}}
+<div class="alert alert-danger mb-6">{{.Error}}</div>
+{{end}}
+
+<form method="POST" action="/app/guild/config?id={{.Guild.ID}}">
+  <div class="card" style="padding:24px;max-width:480px">
+    <div style="margin-bottom:20px">
+      <label style="display:block;font-weight:600;margin-bottom:6px;font-size:.9rem">ID de catégorie tickets</label>
+      <div class="text-secondary text-sm" style="margin-bottom:8px">
+        L'ID de la catégorie Discord dans laquelle les salons tickets seront créés.
+        Laissez vide pour utiliser la détection automatique.
+      </div>
+      <input
+        type="text"
+        name="ticket_category_id"
+        value="{{.TicketCategoryID}}"
+        placeholder="ex: 1234567890123456789"
+        style="width:100%;padding:8px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.9rem"
+      />
+    </div>
+    <button type="submit" class="btn btn-primary">Sauvegarder</button>
+  </div>
+</form>
+{{end}}

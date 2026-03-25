@@ -65,6 +65,13 @@ type modulesViewData struct {
 	Modules []moduleStatus
 }
 
+type configViewData struct {
+	guildViewData
+	TicketCategoryID string
+	Saved            bool
+	Error            string
+}
+
 type billingPlan struct {
 	ID       string
 	Name     string
@@ -386,6 +393,45 @@ func (s *Server) handleGuildModules(w http.ResponseWriter, r *http.Request) {
 		guildViewData: guildViewData{pageData: s.base(r, "modules"), Guild: guild},
 		Modules:       modules,
 	})
+}
+
+func (s *Server) handleGuildConfig(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	guild, ok := s.resolveGuild(r, user)
+	if !ok {
+		http.Redirect(w, r, "/app", http.StatusFound)
+		return
+	}
+
+	defaults := storage.GuildSettings{}
+	settings, err := s.store.GetGuildSettings(r.Context(), guild.ID, defaults)
+	if err != nil {
+		s.logger.Sugar().Errorw("get guild settings", "err", err)
+	}
+
+	data := configViewData{
+		guildViewData:    guildViewData{pageData: s.base(r, "config"), Guild: guild},
+		TicketCategoryID: settings.TicketCategoryID,
+	}
+
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			data.Error = "Erreur lors de la lecture du formulaire."
+			s.renderPage(w, "config", data)
+			return
+		}
+		categoryID := r.FormValue("ticket_category_id")
+		if err := s.store.SetTicketCategoryID(r.Context(), guild.ID, categoryID); err != nil {
+			s.logger.Sugar().Errorw("set ticket category", "err", err)
+			data.Error = "Erreur lors de la sauvegarde."
+			s.renderPage(w, "config", data)
+			return
+		}
+		data.TicketCategoryID = categoryID
+		data.Saved = true
+	}
+
+	s.renderPage(w, "config", data)
 }
 
 func (s *Server) handleBilling(w http.ResponseWriter, r *http.Request) {

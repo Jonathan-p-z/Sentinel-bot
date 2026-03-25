@@ -111,6 +111,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/app/guild/audit", s.requireAuth(s.handleGuildAudit))
 	s.mux.HandleFunc("/app/guild/risk", s.requireAuth(s.handleGuildRisk))
 	s.mux.HandleFunc("/app/guild/modules", s.requireAuth(s.handleGuildModules))
+	s.mux.HandleFunc("/app/guild/config", s.requireAuth(s.handleGuildConfig))
 	s.mux.HandleFunc("/app/billing", s.requireAuth(s.handleBilling))
 
 	// Admin — requires admin user + optional secret path

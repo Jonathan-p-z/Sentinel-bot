@@ -161,6 +161,7 @@ var translations = map[string]map[string]string{
 		"ticket_not_found":               "Ticket introuvable.",
 		"ticket_help_title":              "Comment bien décrire ton problème",
 		"ticket_help_body":               "• Décris le problème précisément\n• Indique les étapes pour le reproduire\n• Mentionne les messages d'erreur si applicable\n• Précise quand ça a commencé",
+		"ticket_setup_ok":                "Catégorie tickets configurée : <#%s>",
 	},
 	"en": {
 		"author_security":                "Bastion",
@@ -322,6 +323,7 @@ var translations = map[string]map[string]string{
 		"ticket_not_found":               "Ticket not found.",
 		"ticket_help_title":              "How to describe your issue",
 		"ticket_help_body":               "• Describe the problem clearly\n• List the steps to reproduce it\n• Include any error messages\n• Mention when it started",
+		"ticket_setup_ok":                "Ticket category configured: <#%s>",
 	},
 	"es": {
 		"author_security":                "Bastion",
@@ -483,6 +485,7 @@ var translations = map[string]map[string]string{
 		"ticket_not_found":               "Ticket no encontrado.",
 		"ticket_help_title":              "Cómo describir tu problema",
 		"ticket_help_body":               "• Describe el problema claramente\n• Lista los pasos para reproducirlo\n• Incluye mensajes de error si los hay\n• Menciona cuándo empezó",
+		"ticket_setup_ok":                "Categoría de tickets configurada: <#%s>",
 	},
 }
 

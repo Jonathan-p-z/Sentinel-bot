@@ -64,7 +64,12 @@ func (b *Bot) onInteractionCreate(session *discordgo.Session, interaction *disco
 		}
 		b.respondEmbed(session, interaction, b.commandEmbed(b.t(lang, "verify_title"), b.t(lang, "verify_requested"), b.cfg.Notifications.EmbedColors.Action, nil), true)
 	case "ticket":
-		b.handleTicketCommand(ctx, session, interaction)
+		opts := data.Options
+		if len(opts) > 0 && opts[0].Name == "setup" {
+			b.handleTicketSetup(ctx, session, interaction)
+		} else {
+			b.handleTicketCommand(ctx, session, interaction)
+		}
 	}
 }
 
