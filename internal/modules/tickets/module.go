@@ -48,20 +48,12 @@ func EnsureCategory(session *discordgo.Session, guildID string) (string, error) 
 		}
 	}
 
-	botID := session.State.User.ID
-
 	perms := []*discordgo.PermissionOverwrite{
-		// @everyone: deny view so the category is invisible by default.
+		// @everyone: deny view so the category and its children are hidden by default.
 		{
 			ID:   guildID,
 			Type: discordgo.PermissionOverwriteTypeRole,
 			Deny: discordgo.PermissionViewChannel,
-		},
-		// Bot: explicit allow so it can manage child-channel overwrites (avoids 50013).
-		{
-			ID:    botID,
-			Type:  discordgo.PermissionOverwriteTypeMember,
-			Allow: discordgo.PermissionViewChannel | discordgo.PermissionManageRoles | discordgo.PermissionManageChannels,
 		},
 	}
 
