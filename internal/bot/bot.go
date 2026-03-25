@@ -16,6 +16,7 @@ import (
 	"sentinel-adaptive/internal/modules/antispam"
 	"sentinel-adaptive/internal/modules/audit"
 	"sentinel-adaptive/internal/modules/behavior"
+	"sentinel-adaptive/internal/modules/shadowmute"
 	"sentinel-adaptive/internal/modules/verification"
 	"sentinel-adaptive/internal/playbook"
 	"sentinel-adaptive/internal/risk"
@@ -36,25 +37,24 @@ type Bot struct {
 	audit          *audit.Logger
 	analytics      *analytics.Service
 	session        *discordgo.Session
-	antispam       *antispam.Module
-	antiraid       *antiraid.Module
-	antiphish      *antiphishing.Module
-	antinuke       *antinuke.Module
-	antinukeExempt *antinuke.Module
-	behavior       *behavior.Module
-	verify         *verification.Module
-	auditAgg       map[string]*auditAggregate
-	auditAggMu     sync.Mutex
-	warnAgg        map[string]*warningAggregate
-	warnAggMu      sync.Mutex
-	detectAgg      map[string]*detectionAggregate
-	detectAggMu    sync.Mutex
-	lockdownMu     sync.Mutex
-	lockdownMap    map[string]*lockdownSnapshot
-}
-
-func (b *Bot) shouldSuppressRiskAction(s string, param2 string, param3 string, false bool) any {
-	panic("unimplemented")
+	antispam        *antispam.Module
+	antiraid        *antiraid.Module
+	antiphish       *antiphishing.Module
+	antinuke        *antinuke.Module
+	antinukeExempt  *antinuke.Module
+	behavior        *behavior.Module
+	verify          *verification.Module
+	shadowmute      *shadowmute.Module
+	auditAgg        map[string]*auditAggregate
+	auditAggMu      sync.Mutex
+	warnAgg         map[string]*warningAggregate
+	warnAggMu       sync.Mutex
+	detectAgg       map[string]*detectionAggregate
+	detectAggMu     sync.Mutex
+	lockdownMu      sync.Mutex
+	lockdownMap     map[string]*lockdownSnapshot
+	riskActionAgg   map[string]*riskActionAggregate
+	riskActionMu    sync.Mutex
 }
 
 type auditAggregate struct {
@@ -113,10 +113,11 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 		audit:       auditLogger,
 		analytics:   analyticsEngine,
 		session:     session,
-		auditAgg:    make(map[string]*auditAggregate),
-		warnAgg:     make(map[string]*warningAggregate),
-		detectAgg:   make(map[string]*detectionAggregate),
-		lockdownMap: make(map[string]*lockdownSnapshot),
+		auditAgg:      make(map[string]*auditAggregate),
+		warnAgg:       make(map[string]*warningAggregate),
+		detectAgg:     make(map[string]*detectionAggregate),
+		lockdownMap:   make(map[string]*lockdownSnapshot),
+		riskActionAgg: make(map[string]*riskActionAggregate),
 	}
 
 	b.antispam = antispam.New(cfg.Thresholds, riskEngine, auditLogger)
@@ -125,7 +126,8 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 	b.antinuke = antinuke.New(time.Duration(cfg.Nuke.WindowSeconds) * time.Second)
 	b.antinukeExempt = antinuke.New(time.Duration(cfg.Nuke.ExemptWindowSeconds) * time.Second)
 	b.behavior = behavior.New()
-	b.verify = verification.New()
+	b.verify = verification.New(cfg.Onboarding, store, auditLogger)
+	b.shadowmute = shadowmute.New(cfg.ShadowMute, store, auditLogger)
 	if b.audit != nil {
 		b.audit.SetNotifier(func(ctx context.Context, entry storage.AuditLog) {
 			if !b.cfg.Notifications.AuditToChannel {
