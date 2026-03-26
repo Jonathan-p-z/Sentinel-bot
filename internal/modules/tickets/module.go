@@ -75,9 +75,35 @@ func EnsureLogChannel(session *discordgo.Session, guildID string) (string, error
 func CreateTicketChannel(session *discordgo.Session, guildID, categoryID, userID, username string) (*discordgo.Channel, error) {
 	name := "ticket-" + sanitizeUsername(username)
 
+	ownerAllow := int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory)
+	everyoneDeny := int64(discordgo.PermissionViewChannel)
+
+	overwrites := []*discordgo.PermissionOverwrite{
+		{
+			ID:   guildID,
+			Type: discordgo.PermissionOverwriteTypeRole,
+			Deny: everyoneDeny,
+		},
+		{
+			ID:    userID,
+			Type:  discordgo.PermissionOverwriteTypeMember,
+			Allow: ownerAllow,
+		},
+	}
+
+	if session.State != nil && session.State.User != nil {
+		botAllow := int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory | discordgo.PermissionManageChannels)
+		overwrites = append(overwrites, &discordgo.PermissionOverwrite{
+			ID:    session.State.User.ID,
+			Type:  discordgo.PermissionOverwriteTypeMember,
+			Allow: botAllow,
+		})
+	}
+
 	data := discordgo.GuildChannelCreateData{
-		Name: name,
-		Type: discordgo.ChannelTypeGuildText,
+		Name:                 name,
+		Type:                 discordgo.ChannelTypeGuildText,
+		PermissionOverwrites: overwrites,
 	}
 	if categoryID != "" {
 		data.ParentID = categoryID
@@ -87,43 +113,6 @@ func CreateTicketChannel(session *discordgo.Session, guildID, categoryID, userID
 	if err != nil {
 		return nil, fmt.Errorf("create ticket channel: %w", err)
 	}
-
-	// @everyone: deny ViewChannel.
-	if err := session.ChannelPermissionSet(
-		ch.ID, guildID,
-		discordgo.PermissionOverwriteTypeRole,
-		0, discordgo.PermissionViewChannel,
-	); err != nil {
-		_, _ = session.ChannelDelete(ch.ID)
-		return nil, fmt.Errorf("set @everyone overwrite: %w", err)
-	}
-
-	// Ticket owner: allow ViewChannel + SendMessages + ReadMessageHistory.
-	if err := session.ChannelPermissionSet(
-		ch.ID, userID,
-		discordgo.PermissionOverwriteTypeMember,
-		discordgo.PermissionViewChannel|discordgo.PermissionSendMessages|discordgo.PermissionReadMessageHistory,
-		0,
-	); err != nil {
-		_, _ = session.ChannelDelete(ch.ID)
-		return nil, fmt.Errorf("set owner overwrite: %w", err)
-	}
-
-	// Bot: allow ViewChannel + SendMessages + ReadMessageHistory + ManageChannels.
-	// Required because @everyone deny removes the bot from the channel too (unless Administrator).
-	if session.State != nil && session.State.User != nil {
-		botID := session.State.User.ID
-		if err := session.ChannelPermissionSet(
-			ch.ID, botID,
-			discordgo.PermissionOverwriteTypeMember,
-			discordgo.PermissionViewChannel|discordgo.PermissionSendMessages|discordgo.PermissionReadMessageHistory|discordgo.PermissionManageChannels,
-			0,
-		); err != nil {
-			_, _ = session.ChannelDelete(ch.ID)
-			return nil, fmt.Errorf("set bot overwrite: %w", err)
-		}
-	}
-
 	return ch, nil
 }
 
