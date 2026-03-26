@@ -123,16 +123,16 @@ func SendWelcomeMessage(session *discordgo.Session, channelID, userID, lang stri
 	switch lang {
 	case "en":
 		welcome = mention + " — Welcome to your ticket! Describe your issue below."
-		closeLabel = "🔒 Close ticket"
-		helpLabel = "📋 How to describe your issue"
+		closeLabel = "Close ticket"
+		helpLabel = "How to describe your issue"
 	case "es":
 		welcome = mention + " — ¡Bienvenido a tu ticket! Describe tu problema a continuación."
-		closeLabel = "🔒 Cerrar ticket"
-		helpLabel = "📋 Cómo describir tu problema"
+		closeLabel = "Cerrar ticket"
+		helpLabel = "Cómo describir tu problema"
 	default: // fr
 		welcome = mention + " — Bienvenue dans ton ticket ! Décris ton problème ci-dessous."
-		closeLabel = "🔒 Fermer le ticket"
-		helpLabel = "📋 Comment bien décrire ton problème"
+		closeLabel = "Fermer le ticket"
+		helpLabel = "Comment bien décrire ton problème"
 	}
 
 	_, err := session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
@@ -143,11 +143,13 @@ func SendWelcomeMessage(session *discordgo.Session, channelID, userID, lang stri
 					discordgo.Button{
 						Label:    closeLabel,
 						Style:    discordgo.DangerButton,
+						Emoji:    discordgo.ComponentEmoji{Name: "🔒"},
 						CustomID: "ticket_close",
 					},
 					discordgo.Button{
 						Label:    helpLabel,
 						Style:    discordgo.SecondaryButton,
+						Emoji:    discordgo.ComponentEmoji{Name: "📋"},
 						CustomID: "ticket_help",
 					},
 				},
