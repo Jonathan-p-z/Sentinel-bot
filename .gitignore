@@ -20,3 +20,7 @@ build_errors.log
 
 # Go
 vendor/
+*.swp
+CACHED
+go*.linux-amd64.tar.gz
+sentinel-bot
