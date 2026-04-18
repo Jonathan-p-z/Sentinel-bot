@@ -10,6 +10,7 @@ import (
 
 	"sentinel-adaptive/internal/analytics"
 	"sentinel-adaptive/internal/config"
+	i18npkg "sentinel-adaptive/internal/i18n"
 	"sentinel-adaptive/internal/modules/antinuke"
 	"sentinel-adaptive/internal/modules/antiphishing"
 	"sentinel-adaptive/internal/modules/antiraid"
@@ -31,6 +32,7 @@ type Bot struct {
 	cfg            config.Config
 	logger         *zap.Logger
 	store          *storage.Store
+	i18n           *i18npkg.I18n
 	risk           *risk.Engine
 	trust          *trust.Engine
 	playbook       *playbook.Engine
@@ -91,6 +93,11 @@ type channelSnapshot struct {
 }
 
 func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine *risk.Engine, trustEngine *trust.Engine, playbookEngine *playbook.Engine, auditLogger *audit.Logger, analyticsEngine *analytics.Service) (*Bot, error) {
+	locale, err := i18npkg.New()
+	if err != nil {
+		return nil, fmt.Errorf("load i18n: %w", err)
+	}
+
 	session, err := discordgo.New("Bot " + cfg.DiscordToken)
 	if err != nil {
 		return nil, err
@@ -107,6 +114,7 @@ func New(cfg config.Config, logger *zap.Logger, store *storage.Store, riskEngine
 		cfg:         cfg,
 		logger:      logger,
 		store:       store,
+		i18n:        locale,
 		risk:        riskEngine,
 		trust:       trustEngine,
 		playbook:    playbookEngine,
