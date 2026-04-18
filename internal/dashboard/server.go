@@ -122,7 +122,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc(adminPath, s.requireAdmin(s.handleAdmin))
 }
 
-// ── Template rendering ────────────────────────────────
+// Template rendering 
 
 func (s *Server) funcMap() template.FuncMap {
 	return template.FuncMap{
@@ -176,7 +176,7 @@ func (s *Server) renderStandalone(w http.ResponseWriter, page string, data inter
 	}
 }
 
-// ── Template helpers ──────────────────────────────────
+// Template helpers 
 
 func avatarURL(userID, avatar string) string {
 	if avatar == "" {

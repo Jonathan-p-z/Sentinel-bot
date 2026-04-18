@@ -40,8 +40,6 @@ func (b *Bot) onInteractionCreate(session *discordgo.Session, interaction *disco
 		switch data.CustomID {
 		case "ticket_close":
 			b.handleTicketClose(ctx, session, interaction)
-		case "ticket_help":
-			b.handleTicketHelp(ctx, session, interaction)
 		}
 		return
 	}

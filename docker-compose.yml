@@ -1,15 +1,40 @@
-version: "3.9"
 services:
   sentinel:
     build: .
     env_file: .env
     environment:
       - CONFIG_PATH=/app/config.yaml
-      - DATABASE_PATH=/data/sentinel.db
     volumes:
-      - sentinel-data:/data
       - ./config.yaml:/app/config.yaml:ro
-    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    restart: always
+    networks:
+      - sentinel-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
-volumes:
-  sentinel-data:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    restart: always
+    environment:
+      - TUNNEL_LOGLEVEL=info
+    depends_on:
+      sentinel:
+        condition: service_healthy
+    networks:
+      - sentinel-net
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  sentinel-net:

@@ -8,7 +8,7 @@ import (
 	"sentinel-adaptive/internal/storage"
 )
 
-// ── Page data types ───────────────────────────────────
+// Page data types 
 
 type pageData struct {
 	User        *storage.WebUser

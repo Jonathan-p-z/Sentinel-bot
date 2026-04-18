@@ -24,6 +24,8 @@ Sentinel Adaptive is a self-hosted, privacy-first Discord bot designed for multi
   - [Anti-Nuke](#anti-nuke)
   - [Escalation Ladder](#escalation-ladder)
   - [Lockdown Playbook](#lockdown-playbook)
+- [Ticket System](#ticket-system)
+- [Internationalisation](#internationalisation)
 - [Audit System](#audit-system)
 - [Whitelist](#whitelist)
 - [Notifications](#notifications)
@@ -46,6 +48,7 @@ Sentinel Adaptive is a self-hosted, privacy-first Discord bot designed for multi
 | **Anti-Nuke** | Per-actor action counter against channel/role/webhook/ban/guild mass-events |
 | **Escalation Ladder** | Centralized risk-score-driven palier system: warn → mute → kick → ban |
 | **Lockdown Playbook** | Multi-phase channel freeze (Lockdown → Strict → Exiting → Normal) with auto-restore |
+| **Ticket System** | Per-user support ticket channels with close button, transcript archiving, and tier limits |
 | **Audit Logger** | Structured DB log with optional mirror to security channel |
 | **Web Dashboard** | OAuth2 Discord login, guild overview, audit log, risk leaderboard, module config |
 | **Audit-Only Mode** | Simulate all enforcement silently — ideal for threshold tuning |
@@ -409,6 +412,62 @@ The playbook is a state machine per guild. Once triggered:
 ```
 
 On entry, all text/news channels have their `@everyone` permission overwrites snapshotted. Slowmode is applied and `SEND_MESSAGES` is denied (when `lockdown_deny_send: true`). On exit, all overwrites are restored to their original state.
+
+---
+
+## Ticket System
+
+The ticket module creates isolated support channels on demand, with tier-based limits and automatic transcript archiving.
+
+### Slash Commands
+
+| Command | Who | Description |
+|---|---|---|
+| `/ticket` | Any member | Opens a new private support channel (blocked if one is already open) |
+| `/ticket setup category <id>` | ManageServer | Sets the Discord category where ticket channels are created |
+
+### Close Button
+
+Every ticket channel contains a **🔒 Fermer le ticket** button. Clicking it:
+
+1. Checks the user is the ticket owner **or** has `ManageServer`
+2. Sends an ephemeral confirmation embed ("Ticket fermé. Ce salon va être supprimé.")
+3. Generates a transcript of the last 100 messages
+4. Posts the transcript to `#ticket-logs` (created automatically if absent, hidden from `@everyone`)
+5. Marks the ticket as closed in the database
+6. Deletes the channel after a 1-second delay (gives Discord time to deliver the confirmation)
+
+### Tier Limits
+
+Simultaneous open tickets per guild are capped by the guild's subscription plan:
+
+| Plan | Limit |
+|---|---|
+| free | 3 |
+| pro | 10 |
+| business | 25 |
+| enterprise | 50 |
+
+---
+
+## Internationalisation
+
+All user-facing strings are loaded at startup from embedded JSON locale files.
+
+```
+internal/i18n/
+  locales/
+    fr.json    ← default
+    en.json
+    es.json
+  i18n.go      ← embed.FS + I18n struct + T(lang, key) method
+```
+
+- The `New()` function parses all three files and returns an error if any file is missing or malformed — the bot will refuse to start with a broken locale.
+- Fallback chain: requested language → `en` → raw key.
+- The server language is set per-guild via `/language fr|en|es`.
+
+To add a new language, create `internal/i18n/locales/<lang>.json` with all keys and add `<lang>` to the `langs` slice in `i18n.go`.
 
 ---
 

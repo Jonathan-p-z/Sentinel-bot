@@ -119,38 +119,31 @@ func CreateTicketChannel(session *discordgo.Session, guildID, categoryID, userID
 func SendWelcomeMessage(session *discordgo.Session, channelID, userID, lang string) error {
 	mention := fmt.Sprintf("<@%s>", userID)
 
-	var welcome, closeLabel, helpLabel string
+	var description string
 	switch lang {
 	case "en":
-		welcome = mention + " — Welcome to your ticket! Describe your issue below."
-		closeLabel = "Close ticket"
-		helpLabel = "How to describe your issue"
+		description = "Hello " + mention + ", the support team will respond as soon as possible. Describe your issue below."
 	case "es":
-		welcome = mention + " — ¡Bienvenido a tu ticket! Describe tu problema a continuación."
-		closeLabel = "Cerrar ticket"
-		helpLabel = "Cómo describir tu problema"
+		description = "Hola " + mention + ", el equipo de soporte te responderá lo antes posible. Describe tu problema a continuación."
 	default: // fr
-		welcome = mention + " — Bienvenue dans ton ticket ! Décris ton problème ci-dessous."
-		closeLabel = "Fermer le ticket"
-		helpLabel = "Comment bien décrire ton problème"
+		description = "Bonjour " + mention + ", l'équipe support va vous répondre dès que possible. Décrivez votre problème ci-dessous."
 	}
 
 	_, err := session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
-		Content: welcome,
+		Embeds: []*discordgo.MessageEmbed{
+			{
+				Title:       "🎫 Ticket ouvert",
+				Description: description,
+				Color:       0x57F287,
+			},
+		},
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{
 				Components: []discordgo.MessageComponent{
 					discordgo.Button{
-						Label:    closeLabel,
+						Label:    "🔒 Fermer le ticket",
 						Style:    discordgo.DangerButton,
-						Emoji:    discordgo.ComponentEmoji{Name: "🔒"},
 						CustomID: "ticket_close",
-					},
-					discordgo.Button{
-						Label:    helpLabel,
-						Style:    discordgo.SecondaryButton,
-						Emoji:    discordgo.ComponentEmoji{Name: "📋"},
-						CustomID: "ticket_help",
 					},
 				},
 			},

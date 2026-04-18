@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"sentinel-adaptive/internal/modules/audit"
 	"sentinel-adaptive/internal/modules/tickets"
@@ -172,32 +173,15 @@ func (b *Bot) handleTicketClose(ctx context.Context, session *discordgo.Session,
 	b.audit.Log(ctx, audit.LevelInfo, interaction.GuildID, actorID, "ticket_close",
 		fmt.Sprintf("channel=%s owner=%s", channelID, ticket.UserID))
 
+	embed := b.commandEmbed(b.t(lang, "ticket_title"), b.t(lang, "ticket_closed"), b.cfg.Notifications.EmbedColors.Action, nil)
+	_, _ = session.InteractionResponseEdit(interaction.Interaction, &discordgo.WebhookEdit{
+		Embeds: &[]*discordgo.MessageEmbed{embed},
+	})
+
+	time.Sleep(1 * time.Second)
 	_, _ = session.ChannelDelete(channelID)
 }
 
-func (b *Bot) handleTicketHelp(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) {
-	_ = ctx
-	settings := b.guildSettings(ctx, interaction.GuildID)
-	lang := settings.Language
-	if lang == "" {
-		lang = b.cfg.DefaultLanguage
-	}
-
-	_ = session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Embeds: []*discordgo.MessageEmbed{
-				b.commandEmbed(
-					b.t(lang, "ticket_help_title"),
-					b.t(lang, "ticket_help_body"),
-					b.cfg.Notifications.EmbedColors.Action,
-					nil,
-				),
-			},
-			Flags: discordgo.MessageFlagsEphemeral,
-		},
-	})
-}
 
 func (b *Bot) handleTicketSetup(ctx context.Context, session *discordgo.Session, interaction *discordgo.InteractionCreate) {
 	if interaction.GuildID == "" {
