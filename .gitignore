@@ -10,9 +10,13 @@ data/
 # Binaries
 security_bot
 sentinel
+sentinel-adaptive
+sentinel-bot
 *.exe
 
-# Assets locaux
+# Build output
+dist/
+tmp/
 
 # Logs
 *.log
@@ -20,7 +24,13 @@ build_errors.log
 
 # Go
 vendor/
+*.test
+*.out
 *.swp
+coverage.html
 CACHED
 go*.linux-amd64.tar.gz
-sentinel-bot
+
+# OS
+.DS_Store
+Thumbs.db
