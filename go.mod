@@ -11,6 +11,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
+require github.com/stripe/stripe-go/v82 v82.5.1 // indirect
+
 require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
