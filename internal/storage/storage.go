@@ -83,11 +83,11 @@ type WebSession struct {
 
 type Subscription struct {
 	ID                   int64
-	UserID               string
 	GuildID              string
-	Plan                 string
 	StripeCustomerID     string
 	StripeSubscriptionID string
+	PriceID              string
+	Tier                 string
 	Status               string
 	CurrentPeriodEnd     time.Time
 	CreatedAt            time.Time
@@ -642,68 +642,68 @@ func (s *Store) CleanupSessions(ctx context.Context) error {
 // ── Subscriptions ─────────────────────────────────────────────────────────────
 
 func (s *Store) UpsertSubscription(ctx context.Context, sub Subscription) error {
+	var periodEnd sql.NullTime
+	if !sub.CurrentPeriodEnd.IsZero() {
+		periodEnd = sql.NullTime{Time: sub.CurrentPeriodEnd, Valid: true}
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO subscriptions (user_id, guild_id, plan, stripe_customer_id, stripe_subscription_id, status, current_period_end, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO subscriptions (guild_id, stripe_customer_id, stripe_subscription_id, price_id, tier, status, current_period_end)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT(guild_id) DO UPDATE SET
-			user_id = EXCLUDED.user_id,
-			plan = EXCLUDED.plan,
-			stripe_customer_id = EXCLUDED.stripe_customer_id,
+			stripe_customer_id     = EXCLUDED.stripe_customer_id,
 			stripe_subscription_id = EXCLUDED.stripe_subscription_id,
-			status = EXCLUDED.status,
-			current_period_end = EXCLUDED.current_period_end,
-			updated_at = EXCLUDED.updated_at`,
-		sub.UserID, sub.GuildID, sub.Plan,
-		sub.StripeCustomerID, sub.StripeSubscriptionID,
-		sub.Status, sub.CurrentPeriodEnd.Unix(),
-		sub.CreatedAt.Unix(), sub.UpdatedAt.Unix())
+			price_id               = EXCLUDED.price_id,
+			tier                   = EXCLUDED.tier,
+			status                 = EXCLUDED.status,
+			current_period_end     = EXCLUDED.current_period_end,
+			updated_at             = NOW()`,
+		sub.GuildID, sub.StripeCustomerID, sub.StripeSubscriptionID,
+		sub.PriceID, sub.Tier, sub.Status, periodEnd)
 	return err
 }
 
 func (s *Store) GetSubscription(ctx context.Context, guildID string) (*Subscription, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, guild_id, plan, stripe_customer_id, stripe_subscription_id, status, current_period_end, created_at, updated_at
+		SELECT id, guild_id, stripe_customer_id, stripe_subscription_id, price_id, tier, status, current_period_end, created_at, updated_at
 		FROM subscriptions WHERE guild_id = $1`, guildID)
 	var sub Subscription
-	var periodEnd, createdAt, updatedAt int64
-	err := row.Scan(&sub.ID, &sub.UserID, &sub.GuildID, &sub.Plan,
-		&sub.StripeCustomerID, &sub.StripeSubscriptionID,
-		&sub.Status, &periodEnd, &createdAt, &updatedAt)
+	var periodEnd sql.NullTime
+	err := row.Scan(
+		&sub.ID, &sub.GuildID, &sub.StripeCustomerID, &sub.StripeSubscriptionID,
+		&sub.PriceID, &sub.Tier, &sub.Status, &periodEnd,
+		&sub.CreatedAt, &sub.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	sub.CurrentPeriodEnd = time.Unix(periodEnd, 0)
-	sub.CreatedAt = time.Unix(createdAt, 0)
-	sub.UpdatedAt = time.Unix(updatedAt, 0)
+	if periodEnd.Valid {
+		sub.CurrentPeriodEnd = periodEnd.Time
+	}
 	return &sub, nil
 }
 
-func (s *Store) ListUserSubscriptions(ctx context.Context, userID string) ([]Subscription, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, user_id, guild_id, plan, stripe_customer_id, stripe_subscription_id, status, current_period_end, created_at, updated_at
-		FROM subscriptions WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+func (s *Store) GetSubscriptionByStripeSubID(ctx context.Context, stripeSubID string) (*Subscription, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, guild_id, stripe_customer_id, stripe_subscription_id, price_id, tier, status, current_period_end, created_at, updated_at
+		FROM subscriptions WHERE stripe_subscription_id = $1`, stripeSubID)
+	var sub Subscription
+	var periodEnd sql.NullTime
+	err := row.Scan(
+		&sub.ID, &sub.GuildID, &sub.StripeCustomerID, &sub.StripeSubscriptionID,
+		&sub.PriceID, &sub.Tier, &sub.Status, &periodEnd,
+		&sub.CreatedAt, &sub.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	defer rows.Close()
-	var subs []Subscription
-	for rows.Next() {
-		var sub Subscription
-		var periodEnd, createdAt, updatedAt int64
-		if err := rows.Scan(&sub.ID, &sub.UserID, &sub.GuildID, &sub.Plan,
-			&sub.StripeCustomerID, &sub.StripeSubscriptionID,
-			&sub.Status, &periodEnd, &createdAt, &updatedAt); err != nil {
-			return nil, err
-		}
-		sub.CurrentPeriodEnd = time.Unix(periodEnd, 0)
-		sub.CreatedAt = time.Unix(createdAt, 0)
-		sub.UpdatedAt = time.Unix(updatedAt, 0)
-		subs = append(subs, sub)
+	if periodEnd.Valid {
+		sub.CurrentPeriodEnd = periodEnd.Time
 	}
-	return subs, rows.Err()
+	return &sub, nil
 }
 
 // ── Admin stats ───────────────────────────────────────────────────────────────
@@ -715,19 +715,19 @@ func (s *Store) CountGuildSettings(ctx context.Context) (int, error) {
 }
 
 func (s *Store) CountSubscriptionsByPlan(ctx context.Context) (map[string]int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT plan, COUNT(*) FROM subscriptions WHERE status = 'active' GROUP BY plan`)
+	rows, err := s.db.QueryContext(ctx, `SELECT tier, COUNT(*) FROM subscriptions WHERE status = 'active' GROUP BY tier`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	result := map[string]int{"free": 0, "pro": 0, "business": 0, "enterprise": 0}
 	for rows.Next() {
-		var plan string
+		var tier string
 		var count int
-		if err := rows.Scan(&plan, &count); err != nil {
+		if err := rows.Scan(&tier, &count); err != nil {
 			return nil, err
 		}
-		result[plan] = count
+		result[tier] = count
 	}
 	return result, rows.Err()
 }
