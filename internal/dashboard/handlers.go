@@ -79,12 +79,16 @@ type billingPlan struct {
 	Period   string
 	Features []string
 	Current  bool
+	PriceID  string
 }
 
 type billingData struct {
 	pageData
-	Subscriptions []storage.Subscription
-	Plans         []billingPlan
+	CurrentTier string
+	PeriodEnd   time.Time
+	Plans       []billingPlan
+	Success     bool
+	Canceled    bool
 }
 
 type adminGuildInfo struct {
@@ -153,7 +157,7 @@ func (s *Server) resolveGuild(r *http.Request, user *storage.WebUser) (guildInfo
 	}
 	// Get plan
 	if sub, err := s.store.GetSubscription(r.Context(), guildID); err == nil && sub != nil {
-		g.Plan = sub.Plan
+		g.Plan = sub.Tier
 	} else {
 		g.Plan = "free"
 	}
@@ -273,7 +277,7 @@ func (s *Server) handleAppHome(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if sub, err := s.store.GetSubscription(r.Context(), dg.ID); err == nil && sub != nil {
-			g.Plan = sub.Plan
+			g.Plan = sub.Tier
 		} else {
 			g.Plan = "free"
 		}
@@ -436,27 +440,110 @@ func (s *Server) handleGuildConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBilling(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
-	subs, err := s.store.ListUserSubscriptions(r.Context(), user.UserID)
-	if err != nil {
-		subs = nil
+	guildID := r.URL.Query().Get("id")
+
+	currentTier := "free"
+	var periodEnd time.Time
+
+	if guildID != "" && s.userManagesGuild(user, guildID) {
+		if sub, err := s.billing.GetSubscription(guildID); err == nil {
+			currentTier = sub.Tier
+			if sub.CurrentPeriodEnd != nil {
+				periodEnd = *sub.CurrentPeriodEnd
+			}
+		}
 	}
 
-	// Mark current plan on each billing plan card
-	currentPlan := "free"
-	if len(subs) > 0 {
-		currentPlan = subs[0].Plan
-	}
 	plans := make([]billingPlan, len(billingPlans))
 	copy(plans, billingPlans)
 	for i := range plans {
-		plans[i].Current = plans[i].ID == currentPlan
+		plans[i].Current = plans[i].ID == currentTier
+		switch plans[i].ID {
+		case "pro":
+			plans[i].PriceID = s.cfg.Stripe.PriceIDPro
+		case "business":
+			plans[i].PriceID = s.cfg.Stripe.PriceIDBusiness
+		case "enterprise":
+			plans[i].PriceID = s.cfg.Stripe.PriceIDEnterprise
+		}
 	}
 
 	s.renderPage(w, "billing", billingData{
-		pageData:      s.base(r, "billing"),
-		Subscriptions: subs,
-		Plans:         plans,
+		pageData:    s.base(r, "billing"),
+		CurrentTier: currentTier,
+		PeriodEnd:   periodEnd,
+		Plans:       plans,
+		Success:     r.URL.Query().Get("success") == "true",
+		Canceled:    r.URL.Query().Get("canceled") == "true",
 	})
+}
+
+func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/app/billing", http.StatusSeeOther)
+		return
+	}
+	user := currentUser(r)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	priceID := r.FormValue("price_id")
+	guildID := r.FormValue("guild_id")
+	if priceID == "" || guildID == "" || !s.userManagesGuild(user, guildID) {
+		http.Redirect(w, r, "/app/billing?id="+guildID, http.StatusSeeOther)
+		return
+	}
+
+	session, err := s.billing.CreateCheckoutSession(
+		guildID, user.UserID, priceID,
+		"https://dashboard-bastion.yaiito.fr/app/billing?success=true",
+		"https://dashboard-bastion.yaiito.fr/app/billing?canceled=true",
+	)
+	if err != nil {
+		s.logger.Sugar().Errorw("create checkout session", "err", err)
+		http.Redirect(w, r, "/app/billing?id="+guildID+"&error=1", http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, session.URL, http.StatusSeeOther)
+}
+
+func (s *Server) handleBillingCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/app/billing", http.StatusSeeOther)
+		return
+	}
+	user := currentUser(r)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	guildID := r.FormValue("guild_id")
+	if guildID == "" || !s.userManagesGuild(user, guildID) {
+		http.Redirect(w, r, "/app/billing?id="+guildID, http.StatusSeeOther)
+		return
+	}
+
+	if err := s.billing.CancelSubscription(guildID); err != nil {
+		s.logger.Sugar().Errorw("cancel subscription", "guild_id", guildID, "err", err)
+	}
+
+	http.Redirect(w, r, "/app/billing?canceled=true&id="+guildID, http.StatusSeeOther)
+}
+
+func (s *Server) userManagesGuild(user *storage.WebUser, guildID string) bool {
+	const manageServer = int64(0x20)
+	const adminPerm = int64(0x8)
+	for _, g := range s.getUserGuilds(user) {
+		if g.ID != guildID {
+			continue
+		}
+		return g.Owner || g.Permissions&manageServer != 0 || g.Permissions&adminPerm != 0
+	}
+	return false
 }
 
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
@@ -476,7 +563,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 				MemberCount: g.MemberCount,
 			}
 			if sub, err := s.store.GetSubscription(r.Context(), g.ID); err == nil && sub != nil {
-				info.Plan = sub.Plan
+				info.Plan = sub.Tier
 			} else {
 				info.Plan = "free"
 			}

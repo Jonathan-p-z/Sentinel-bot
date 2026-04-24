@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"sentinel-adaptive/internal/billing"
 	"sentinel-adaptive/internal/config"
 	"sentinel-adaptive/internal/storage"
 	"sentinel-adaptive/web"
@@ -26,6 +27,7 @@ var tmplFS embed.FS
 type Server struct {
 	cfg     config.Config
 	store   *storage.Store
+	billing *billing.BillingService
 	discord *discordgo.Session
 	logger  *zap.Logger
 	mux     *http.ServeMux
@@ -56,6 +58,7 @@ func New(cfg config.Config, store *storage.Store, discord *discordgo.Session, lo
 			},
 		},
 	}
+	s.billing = billing.New(&s.cfg, store)
 	s.routes()
 	return s, nil
 }
@@ -105,6 +108,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/auth/callback", s.limitAuth(s.handleAuthCallback))
 	s.mux.HandleFunc("/auth/logout", s.handleAuthLogout)
 
+	// Stripe webhook — no auth, Stripe signs requests itself
+	s.mux.HandleFunc("/billing/webhook", s.billing.WebhookHandler())
+
 	// App — requires auth
 	s.mux.HandleFunc("/app", s.requireAuth(s.handleAppHome))
 	s.mux.HandleFunc("/app/guild", s.requireAuth(s.handleGuildOverview))
@@ -113,6 +119,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/app/guild/modules", s.requireAuth(s.handleGuildModules))
 	s.mux.HandleFunc("/app/guild/config", s.requireAuth(s.handleGuildConfig))
 	s.mux.HandleFunc("/app/billing", s.requireAuth(s.handleBilling))
+	s.mux.HandleFunc("/app/billing/checkout", s.requireAuth(s.handleBillingCheckout))
+	s.mux.HandleFunc("/app/billing/cancel", s.requireAuth(s.handleBillingCancel))
 
 	// Admin — requires admin user + optional secret path
 	adminPath := "/admin"
