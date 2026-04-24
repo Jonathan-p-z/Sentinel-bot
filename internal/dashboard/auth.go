@@ -52,16 +52,13 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
-	// Verify CSRF state
 	stateCookie, err := r.Cookie("oauth_state")
 	if err != nil || stateCookie.Value != r.URL.Query().Get("state") {
 		http.Error(w, "Invalid state", http.StatusBadRequest)
 		return
 	}
-	// Clear state cookie
 	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: "", Path: "/", MaxAge: -1})
 
-	// Exchange code
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		http.Redirect(w, r, "/login?error=no_code", http.StatusFound)
@@ -74,7 +71,6 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch Discord user info
 	client := s.oauth2.Client(r.Context(), token)
 	dUser, err := fetchDiscordUser(client)
 	if err != nil {
@@ -82,7 +78,6 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch Discord guilds (best effort)
 	dGuilds, _ := fetchDiscordGuilds(client)
 	guildsJSON, _ := json.Marshal(dGuilds)
 

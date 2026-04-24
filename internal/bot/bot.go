@@ -603,8 +603,7 @@ func (b *Bot) isWhitelisted(ctx context.Context, guildID, userID string) bool {
 	return false
 }
 
-// isOutOfReach retourne true si le rôle le plus haut du membre cible est
-// supérieur ou égal à celui du bot — dans ce cas le bot ne peut pas agir.
+// true if the target's highest role is >= the bot's — cannot act in that case
 func (b *Bot) isOutOfReach(guildID, userID string) bool {
 	if b.session == nil || b.session.State == nil || b.session.State.User == nil {
 		return false

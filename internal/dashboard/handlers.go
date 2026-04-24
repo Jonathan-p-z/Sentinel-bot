@@ -8,8 +8,6 @@ import (
 	"sentinel-adaptive/internal/storage"
 )
 
-// Page data types 
-
 type pageData struct {
 	User        *storage.WebUser
 	IsAdmin     bool
@@ -107,8 +105,6 @@ type adminData struct {
 	BotGuilds   []adminGuildInfo
 }
 
-// ── Helpers ───────────────────────────────────────────
-
 func (s *Server) base(r *http.Request, page string) pageData {
 	user := currentUser(r)
 	isAdmin := user != nil && user.UserID == s.cfg.AdminDiscordUserID
@@ -131,8 +127,7 @@ func (s *Server) resolveGuild(r *http.Request, user *storage.WebUser) (guildInfo
 	const manageServer = int64(0x20)
 	const adminPerm = int64(0x8)
 
-	// The guild must be in the user's Discord guild list AND the user must
-	// have Manage Server, Administrator, or be the owner.
+	// user must have manage-server/admin/owner on this guild
 	guilds := s.getUserGuilds(user)
 	var matched *discordGuild
 	for i := range guilds {
@@ -149,13 +144,11 @@ func (s *Server) resolveGuild(r *http.Request, user *storage.WebUser) (guildInfo
 	}
 
 	g := guildInfo{ID: guildID, Name: matched.Name, Icon: matched.Icon}
-	// Check if Bastion is installed
 	if s.discord != nil {
 		if _, err := s.discord.State.Guild(guildID); err == nil {
 			g.HasBastion = true
 		}
 	}
-	// Get plan
 	if sub, err := s.store.GetSubscription(r.Context(), guildID); err == nil && sub != nil {
 		g.Plan = sub.Tier
 	} else {
@@ -220,8 +213,6 @@ var billingPlans = []billingPlan{
 	},
 }
 
-// ── Handlers ──────────────────────────────────────────
-
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -235,7 +226,6 @@ func (s *Server) handleLegal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	// Already logged in → go to app
 	user, _ := s.loadUser(r)
 	if user != nil {
 		http.Redirect(w, r, "/app", http.StatusFound)
@@ -260,7 +250,6 @@ func (s *Server) handleAppHome(w http.ResponseWriter, r *http.Request) {
 
 	var guilds []guildInfo
 	for _, dg := range dGuilds {
-		// Only show guilds where user has MANAGE_SERVER (0x20) or ADMINISTRATOR (0x8)
 		const manageServer = int64(0x20)
 		const admin = int64(0x8)
 		if dg.Permissions&manageServer == 0 && dg.Permissions&admin == 0 && !dg.Owner {
@@ -382,7 +371,6 @@ func (s *Server) handleGuildModules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get guild settings to show module status
 	modules := []moduleStatus{
 		{Name: "Anti-Spam", Description: "Détecte les rafales de messages et limite le spam.", Enabled: true, Icon: "shield"},
 		{Name: "Anti-Raid", Description: "Détecte les afflux de nouveaux membres et déclenche le lockdown.", Enabled: true, Icon: "users"},

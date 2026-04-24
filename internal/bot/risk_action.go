@@ -5,21 +5,13 @@ import (
 	"time"
 )
 
-// ── Risk action deduplication ─────────────────────────
-//
-// shouldSuppressRiskAction prevents the bot from applying
-// the same sanction twice in quick succession for the same
-// (guild, user, action, mode) tuple.
-
 type riskActionAggregate struct {
 	lastAt time.Time
 }
 
 const riskActionCooldown = 5 * time.Minute
 
-// shouldSuppressRiskAction returns true if an identical action
-// was already triggered recently. The auditMode flag uses a
-// separate key so audit-mode events never collide with live ones.
+// returns true if the same (guild, user, action, mode) was triggered within the cooldown
 func (b *Bot) shouldSuppressRiskAction(guildID, userID, action string, auditMode bool) bool {
 	mode := "normal"
 	if auditMode {
@@ -42,15 +34,12 @@ func (b *Bot) shouldSuppressRiskAction(guildID, userID, action string, auditMode
 	return false
 }
 
-// ── Anti-hate escalation ladder ───────────────────────
-
 type hateSanction struct {
 	action         string
 	timeoutMinutes int
 }
 
-// antiHateSanctionForStrike returns the sanction to apply for
-// the nth hate-speech strike. Escalation: warn → timeout (5/15/30/60 min) → ban.
+// escalation ladder: warn → timeout (5/15/30/60 min) → ban
 func antiHateSanctionForStrike(strike int) hateSanction {
 	switch {
 	case strike <= 1:
@@ -68,8 +57,6 @@ func antiHateSanctionForStrike(strike int) hateSanction {
 	}
 }
 
-// antiHateProgressText returns the escalation progress message
-// shown to the sanctioned user in their DM.
 func antiHateProgressText(lang string, strike int) string {
 	// Only French implemented — extend via i18n if needed.
 	_ = lang

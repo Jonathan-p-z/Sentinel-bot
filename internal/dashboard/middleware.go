@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// requireAuth wraps a handler and redirects to /login if no valid session.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, err := s.loadUser(r)
