@@ -23,7 +23,6 @@ import (
 //go:embed templates
 var tmplFS embed.FS
 
-// Server is the HTTP handler for the dashboard.
 type Server struct {
 	cfg     config.Config
 	store   *storage.Store
@@ -68,7 +67,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// securityHeaders adds hardening HTTP headers to every response.
 func (s *Server) securityHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -91,14 +89,12 @@ func init() {
 }
 
 func (s *Server) routes() {
-	// Static assets from embedded web/static/
 	staticFS, err := fs.Sub(web.StaticFS, "static")
 	if err != nil {
 		panic(err)
 	}
 	s.mux.Handle("/static/", http.StripPrefix("/static/", http.FileServerFS(staticFS)))
 
-	// Public
 	s.mux.HandleFunc("/", s.handleLanding)
 	s.mux.HandleFunc("/legal", s.handleLegal)
 	s.mux.HandleFunc("/login", s.handleLoginPage)
@@ -111,7 +107,6 @@ func (s *Server) routes() {
 	// Stripe webhook — no auth, Stripe signs requests itself
 	s.mux.HandleFunc("/billing/webhook", s.billing.WebhookHandler())
 
-	// App — requires auth
 	s.mux.HandleFunc("/app", s.requireAuth(s.handleAppHome))
 	s.mux.HandleFunc("/app/guild", s.requireAuth(s.handleGuildOverview))
 	s.mux.HandleFunc("/app/guild/audit", s.requireAuth(s.handleGuildAudit))
@@ -129,8 +124,6 @@ func (s *Server) routes() {
 	}
 	s.mux.HandleFunc(adminPath, s.requireAdmin(s.handleAdmin))
 }
-
-// Template rendering 
 
 func (s *Server) funcMap() template.FuncMap {
 	return template.FuncMap{
@@ -153,7 +146,6 @@ func (s *Server) funcMap() template.FuncMap {
 	}
 }
 
-// renderPage renders a page that uses the dashboard layout.
 func (s *Server) renderPage(w http.ResponseWriter, page string, data interface{}) {
 	t, err := template.New("").Funcs(s.funcMap()).ParseFS(tmplFS,
 		"templates/layout.html",
@@ -170,7 +162,6 @@ func (s *Server) renderPage(w http.ResponseWriter, page string, data interface{}
 	}
 }
 
-// renderStandalone renders a page without the dashboard layout (landing, login).
 func (s *Server) renderStandalone(w http.ResponseWriter, page string, data interface{}) {
 	t, err := template.New("").Funcs(s.funcMap()).ParseFS(tmplFS, "templates/"+page+".html")
 	if err != nil {
@@ -183,8 +174,6 @@ func (s *Server) renderStandalone(w http.ResponseWriter, page string, data inter
 		s.logger.Error("template execute error", zap.String("page", page), zap.Error(err))
 	}
 }
-
-// Template helpers 
 
 func avatarURL(userID, avatar string) string {
 	if avatar == "" {
@@ -265,13 +254,11 @@ func discordInviteURL(clientID string) string {
 	)
 }
 
-// currentUser retrieves the authenticated user from request context.
 func currentUser(r *http.Request) *storage.WebUser {
 	u, _ := r.Context().Value(ctxUser).(*storage.WebUser)
 	return u
 }
 
-// withUser attaches a user to the context.
 func withUser(ctx context.Context, u *storage.WebUser) context.Context {
 	return context.WithValue(ctx, ctxUser, u)
 }

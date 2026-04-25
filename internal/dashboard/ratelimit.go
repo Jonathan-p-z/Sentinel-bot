@@ -23,7 +23,6 @@ func newRateLimiter() *rateLimiter {
 	return rl
 }
 
-// Allow returns true if the IP is within the allowed limit for the window.
 func (rl *rateLimiter) Allow(ip string, limit int, window time.Duration) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -55,7 +54,6 @@ func (rl *rateLimiter) cleanup() {
 
 // clientIP extracts the real client IP, respecting Cloudflare and standard proxy headers.
 func clientIP(r *http.Request) string {
-	// Cloudflare sets CF-Connecting-IP with the real visitor IP.
 	if ip := r.Header.Get("CF-Connecting-IP"); ip != "" {
 		return ip
 	}
