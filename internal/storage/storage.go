@@ -707,10 +707,20 @@ func (s *Store) GetSubscriptionByStripeSubID(ctx context.Context, stripeSubID st
 }
 
 func (s *Store) GetTiersByGuildIDs(ctx context.Context, guildIDs []string) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT guild_id, tier
-		FROM subscriptions
-		WHERE guild_id = ANY($1)`, guildIDs)
+	if len(guildIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	placeholders := make([]string, len(guildIDs))
+	args := make([]any, len(guildIDs))
+	for i, id := range guildIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	query := fmt.Sprintf(
+		"SELECT guild_id, tier FROM subscriptions WHERE guild_id IN (%s)",
+		strings.Join(placeholders, ","),
+	)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
