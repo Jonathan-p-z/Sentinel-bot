@@ -715,7 +715,13 @@ func (s *Store) CountGuildSettings(ctx context.Context) (int, error) {
 }
 
 func (s *Store) CountSubscriptionsByPlan(ctx context.Context) (map[string]int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT tier, COUNT(*) FROM subscriptions WHERE status = 'active' GROUP BY tier`)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT tier, COUNT(*)
+		FROM subscriptions
+		WHERE status = 'active'
+		  AND stripe_subscription_id IS NOT NULL
+		  AND stripe_subscription_id <> ''
+		GROUP BY tier`)
 	if err != nil {
 		return nil, err
 	}
