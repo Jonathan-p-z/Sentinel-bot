@@ -543,19 +543,23 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 
 	var botGuilds []adminGuildInfo
 	if s.discord != nil {
+		guildIDs := make([]string, 0, len(s.discord.State.Guilds))
 		for _, g := range s.discord.State.Guilds {
-			info := adminGuildInfo{
+			guildIDs = append(guildIDs, g.ID)
+		}
+		tiers, _ := s.store.GetTiersByGuildIDs(r.Context(), guildIDs)
+		for _, g := range s.discord.State.Guilds {
+			tier := tiers[g.ID]
+			if tier == "" {
+				tier = "free"
+			}
+			botGuilds = append(botGuilds, adminGuildInfo{
 				ID:          g.ID,
 				Name:        g.Name,
 				Icon:        g.Icon,
 				MemberCount: g.MemberCount,
-			}
-			if sub, err := s.store.GetSubscription(r.Context(), g.ID); err == nil && sub != nil {
-				info.Plan = sub.Tier
-			} else {
-				info.Plan = "free"
-			}
-			botGuilds = append(botGuilds, info)
+				Plan:        tier,
+			})
 		}
 	}
 

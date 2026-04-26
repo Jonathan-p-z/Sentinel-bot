@@ -706,6 +706,26 @@ func (s *Store) GetSubscriptionByStripeSubID(ctx context.Context, stripeSubID st
 	return &sub, nil
 }
 
+func (s *Store) GetTiersByGuildIDs(ctx context.Context, guildIDs []string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT guild_id, tier
+		FROM subscriptions
+		WHERE guild_id = ANY($1)`, guildIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]string, len(guildIDs))
+	for rows.Next() {
+		var guildID, tier string
+		if err := rows.Scan(&guildID, &tier); err != nil {
+			return nil, err
+		}
+		result[guildID] = tier
+	}
+	return result, rows.Err()
+}
+
 // ── Admin stats ───────────────────────────────────────────────────────────────
 
 func (s *Store) CountGuildSettings(ctx context.Context) (int, error) {
