@@ -97,7 +97,7 @@ func (s *Server) routes() {
 
 	site := http.FileServer(http.Dir("web/site"))
 	siteHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy", "script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';")
+		w.Header().Set("Content-Security-Policy", "script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;")
 		site.ServeHTTP(w, r)
 	})
 	s.mux.Handle("/_next/", siteHandler)
