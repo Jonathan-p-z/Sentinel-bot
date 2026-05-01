@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"sentinel-adaptive/internal/storage"
+
+	"go.uber.org/zap"
 )
 
 type pageData struct {
@@ -151,8 +153,18 @@ func (s *Server) resolveGuild(r *http.Request, user *storage.WebUser) (guildInfo
 	}
 	if sub, err := s.store.GetSubscription(r.Context(), guildID); err == nil && sub != nil {
 		g.Plan = sub.Tier
+		s.logger.Info("resolveGuild: subscription found",
+			zap.String("guild_id", guildID),
+			zap.String("tier", sub.Tier),
+			zap.String("status", sub.Status),
+		)
 	} else {
 		g.Plan = "free"
+		s.logger.Warn("resolveGuild: subscription not found or error, defaulting to free",
+			zap.String("guild_id", guildID),
+			zap.Error(err),
+			zap.Bool("sub_nil", sub == nil),
+		)
 	}
 	return g, true
 }
@@ -373,6 +385,13 @@ func (s *Server) handleGuildModules(w http.ResponseWriter, r *http.Request) {
 
 	isPro := guild.Plan == "pro" || guild.Plan == "business" || guild.Plan == "enterprise"
 	isBusiness := guild.Plan == "business" || guild.Plan == "enterprise"
+
+	s.logger.Info("handleGuildModules: gating computed",
+		zap.String("guild_id", guild.ID),
+		zap.String("plan", guild.Plan),
+		zap.Bool("is_pro", isPro),
+		zap.Bool("is_business", isBusiness),
+	)
 
 	modules := []moduleStatus{
 		{Name: "Anti-Spam", Description: "Détecte les rafales de messages et limite le spam.", Enabled: true, Icon: "shield"},
