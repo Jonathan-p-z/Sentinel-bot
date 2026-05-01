@@ -668,10 +668,11 @@ func (s *Store) GetSubscription(ctx context.Context, guildID string) (*Subscript
 		SELECT id, guild_id, stripe_customer_id, stripe_subscription_id, price_id, tier, status, current_period_end, created_at, updated_at
 		FROM subscriptions WHERE guild_id = $1`, guildID)
 	var sub Subscription
+	var customerID, subID, priceID sql.NullString
 	var periodEnd sql.NullTime
 	err := row.Scan(
-		&sub.ID, &sub.GuildID, &sub.StripeCustomerID, &sub.StripeSubscriptionID,
-		&sub.PriceID, &sub.Tier, &sub.Status, &periodEnd,
+		&sub.ID, &sub.GuildID, &customerID, &subID,
+		&priceID, &sub.Tier, &sub.Status, &periodEnd,
 		&sub.CreatedAt, &sub.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -679,6 +680,9 @@ func (s *Store) GetSubscription(ctx context.Context, guildID string) (*Subscript
 		}
 		return nil, err
 	}
+	sub.StripeCustomerID = customerID.String
+	sub.StripeSubscriptionID = subID.String
+	sub.PriceID = priceID.String
 	if periodEnd.Valid {
 		sub.CurrentPeriodEnd = periodEnd.Time
 	}
@@ -690,10 +694,11 @@ func (s *Store) GetSubscriptionByStripeSubID(ctx context.Context, stripeSubID st
 		SELECT id, guild_id, stripe_customer_id, stripe_subscription_id, price_id, tier, status, current_period_end, created_at, updated_at
 		FROM subscriptions WHERE stripe_subscription_id = $1`, stripeSubID)
 	var sub Subscription
+	var customerID, subID, priceID sql.NullString
 	var periodEnd sql.NullTime
 	err := row.Scan(
-		&sub.ID, &sub.GuildID, &sub.StripeCustomerID, &sub.StripeSubscriptionID,
-		&sub.PriceID, &sub.Tier, &sub.Status, &periodEnd,
+		&sub.ID, &sub.GuildID, &customerID, &subID,
+		&priceID, &sub.Tier, &sub.Status, &periodEnd,
 		&sub.CreatedAt, &sub.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -701,6 +706,9 @@ func (s *Store) GetSubscriptionByStripeSubID(ctx context.Context, stripeSubID st
 		}
 		return nil, err
 	}
+	sub.StripeCustomerID = customerID.String
+	sub.StripeSubscriptionID = subID.String
+	sub.PriceID = priceID.String
 	if periodEnd.Valid {
 		sub.CurrentPeriodEnd = periodEnd.Time
 	}
