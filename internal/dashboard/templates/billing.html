@@ -84,8 +84,14 @@
     <button class="btn btn-secondary w-full" disabled>Plan actuel</button>
     {{else if eq .ID "free"}}
     <button class="btn btn-ghost w-full" disabled>Plan de base</button>
+    {{else if and (eq .ID "enterprise") $.GuildID}}
+    <form method="POST" action="/app/billing/checkout">
+      <input type="hidden" name="price_id" value="{{.PriceID}}">
+      <input type="hidden" name="guild_id" value="{{$.GuildID}}">
+      <button type="submit" class="btn btn-primary w-full">S'abonner</button>
+    </form>
     {{else if eq .ID "enterprise"}}
-    <a href="mailto:contact@bastion.gg" class="btn btn-secondary w-full" style="justify-content:center">Contacter</a>
+    <button class="btn btn-primary w-full" disabled title="Sélectionnez un serveur d'abord">S'abonner</button>
     {{else if $.GuildID}}
     <form method="POST" action="/app/billing/checkout">
       <input type="hidden" name="price_id" value="{{.PriceID}}">
