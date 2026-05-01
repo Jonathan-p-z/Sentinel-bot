@@ -12,7 +12,10 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
-		r = r.WithContext(withUser(r.Context(), user))
+		ctx := r.Context()
+		ctx = withUser(ctx, user)
+		ctx = withLang(ctx, detectLang(r))
+		r = r.WithContext(ctx)
 		next(w, r)
 	}
 }

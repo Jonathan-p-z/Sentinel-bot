@@ -8,10 +8,12 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"strings"
 	"time"
 
 	"sentinel-adaptive/internal/billing"
 	"sentinel-adaptive/internal/config"
+	"sentinel-adaptive/internal/i18n"
 	"sentinel-adaptive/internal/storage"
 	"sentinel-adaptive/web"
 
@@ -32,11 +34,13 @@ type Server struct {
 	mux     *http.ServeMux
 	oauth2  *oauth2.Config
 	rl      *rateLimiter
+	i18n    *i18n.I18n
 }
 
 type contextKey string
 
 const ctxUser contextKey = "user"
+const ctxLang contextKey = "lang"
 
 func New(cfg config.Config, store *storage.Store, discord *discordgo.Session, logger *zap.Logger) (*Server, error) {
 	s := &Server{
@@ -58,6 +62,11 @@ func New(cfg config.Config, store *storage.Store, discord *discordgo.Session, lo
 		},
 	}
 	s.billing = billing.New(&s.cfg, store)
+	i18nSvc, err := i18n.New()
+	if err != nil {
+		return nil, fmt.Errorf("init i18n: %w", err)
+	}
+	s.i18n = i18nSvc
 	s.routes()
 	return s, nil
 }
@@ -131,8 +140,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc(adminPath, s.requireAdmin(s.handleAdmin))
 }
 
-func (s *Server) funcMap() template.FuncMap {
+func (s *Server) funcMap(t func(string) string) template.FuncMap {
 	return template.FuncMap{
+		"T":            t,
 		"avatarURL":    avatarURL,
 		"guildIconURL": guildIconURL,
 		"timeAgo":      timeAgo,
@@ -152,8 +162,13 @@ func (s *Server) funcMap() template.FuncMap {
 	}
 }
 
-func (s *Server) renderPage(w http.ResponseWriter, page string, data interface{}) {
-	t, err := template.New("").Funcs(s.funcMap()).ParseFS(tmplFS,
+func (s *Server) renderPage(w http.ResponseWriter, r *http.Request, page string, data interface{}) {
+	lang := currentLang(r)
+	if lang == "" {
+		lang = detectLang(r)
+	}
+	tFunc := func(key string) string { return s.i18n.T(lang, key) }
+	t, err := template.New("").Funcs(s.funcMap(tFunc)).ParseFS(tmplFS,
 		"templates/layout.html",
 		"templates/"+page+".html",
 	)
@@ -168,8 +183,13 @@ func (s *Server) renderPage(w http.ResponseWriter, page string, data interface{}
 	}
 }
 
-func (s *Server) renderStandalone(w http.ResponseWriter, page string, data interface{}) {
-	t, err := template.New("").Funcs(s.funcMap()).ParseFS(tmplFS, "templates/"+page+".html")
+func (s *Server) renderStandalone(w http.ResponseWriter, r *http.Request, page string, data interface{}) {
+	lang := currentLang(r)
+	if lang == "" {
+		lang = detectLang(r)
+	}
+	tFunc := func(key string) string { return s.i18n.T(lang, key) }
+	t, err := template.New("").Funcs(s.funcMap(tFunc)).ParseFS(tmplFS, "templates/"+page+".html")
 	if err != nil {
 		s.logger.Error("template parse error", zap.String("page", page), zap.Error(err))
 		http.Error(w, "template error", http.StatusInternalServerError)
@@ -267,4 +287,28 @@ func currentUser(r *http.Request) *storage.WebUser {
 
 func withUser(ctx context.Context, u *storage.WebUser) context.Context {
 	return context.WithValue(ctx, ctxUser, u)
+}
+
+func currentLang(r *http.Request) string {
+	lang, _ := r.Context().Value(ctxLang).(string)
+	return lang
+}
+
+func withLang(ctx context.Context, lang string) context.Context {
+	return context.WithValue(ctx, ctxLang, lang)
+}
+
+func detectLang(r *http.Request) string {
+	accepted := r.Header.Get("Accept-Language")
+	for _, part := range strings.Split(accepted, ",") {
+		tag := strings.TrimSpace(strings.SplitN(part, ";", 2)[0])
+		if len(tag) >= 2 {
+			code := strings.ToLower(tag[:2])
+			switch code {
+			case "fr", "en", "es":
+				return code
+			}
+		}
+	}
+	return "en"
 }

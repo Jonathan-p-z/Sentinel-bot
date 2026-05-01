@@ -176,51 +176,51 @@ var billingPlans = []billingPlan{
 		Price:  "0",
 		Period: "",
 		Features: []string{
-			"3 serveurs",
-			"Modules de base (antispam, antiraid, antiphishing)",
-			"Logs 14 jours",
-			"5 règles personnalisées",
+			"billing.plan.free.feature.0",
+			"billing.plan.free.feature.1",
+			"billing.plan.free.feature.2",
+			"billing.plan.free.feature.3",
 		},
 	},
 	{
 		ID:     "pro",
 		Name:   "Pro",
 		Price:  "4.99",
-		Period: "/mois",
+		Period: "billing.period.monthly",
 		Features: []string{
-			"10 serveurs",
-			"Tous les modules",
-			"Logs 60 jours",
-			"Dashboard complet",
-			"Support prioritaire",
+			"billing.plan.pro.feature.0",
+			"billing.plan.pro.feature.1",
+			"billing.plan.pro.feature.2",
+			"billing.plan.pro.feature.3",
+			"billing.plan.pro.feature.4",
 		},
 	},
 	{
 		ID:     "business",
 		Name:   "Business",
 		Price:  "14.99",
-		Period: "/mois",
+		Period: "billing.period.monthly",
 		Features: []string{
-			"25 serveurs",
-			"Tout Pro inclus",
-			"Behaviour Graph",
-			"File Scanner",
-			"API Access",
-			"Logs 180 jours",
+			"billing.plan.business.feature.0",
+			"billing.plan.business.feature.1",
+			"billing.plan.business.feature.2",
+			"billing.plan.business.feature.3",
+			"billing.plan.business.feature.4",
+			"billing.plan.business.feature.5",
 		},
 	},
 	{
 		ID:     "enterprise",
 		Name:   "Enterprise",
 		Price:  "49.99",
-		Period: "/mois",
+		Period: "billing.period.monthly",
 		Features: []string{
-			"50 serveurs",
-			"Tout Business inclus",
-			"Self-host option",
-			"White-label",
-			"Logs 365 jours",
-			"Support dédié",
+			"billing.plan.enterprise.feature.0",
+			"billing.plan.enterprise.feature.1",
+			"billing.plan.enterprise.feature.2",
+			"billing.plan.enterprise.feature.3",
+			"billing.plan.enterprise.feature.4",
+			"billing.plan.enterprise.feature.5",
 		},
 	},
 }
@@ -230,11 +230,11 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.renderStandalone(w, "landing", landingData{})
+	s.renderStandalone(w, r, "landing", landingData{})
 }
 
 func (s *Server) handleLegal(w http.ResponseWriter, r *http.Request) {
-	s.renderPage(w, "legal", s.base(r, "legal"))
+	s.renderPage(w, r, "legal", s.base(r, "legal"))
 }
 
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
@@ -243,17 +243,18 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app", http.StatusFound)
 		return
 	}
+	lang := detectLang(r)
 	errParam := r.URL.Query().Get("error")
 	errMsg := ""
 	switch errParam {
 	case "oauth":
-		errMsg = "Erreur lors de l'authentification Discord."
+		errMsg = s.i18n.T(lang, "auth.error.oauth")
 	case "api":
-		errMsg = "Impossible de récupérer les informations de votre compte Discord."
+		errMsg = s.i18n.T(lang, "auth.error.api")
 	case "db", "session":
-		errMsg = "Erreur interne. Veuillez réessayer."
+		errMsg = s.i18n.T(lang, "auth.error.db")
 	}
-	s.renderStandalone(w, "login", loginData{Error: errMsg})
+	s.renderStandalone(w, r, "login", loginData{Error: errMsg})
 }
 
 func (s *Server) handleAppHome(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +286,7 @@ func (s *Server) handleAppHome(w http.ResponseWriter, r *http.Request) {
 		guilds = append(guilds, g)
 	}
 
-	s.renderPage(w, "app_home", appHomeData{
+	s.renderPage(w, r, "app_home", appHomeData{
 		pageData: s.base(r, "home"),
 		Guilds:   guilds,
 	})
@@ -298,7 +299,7 @@ func (s *Server) handleGuildOverview(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app", http.StatusFound)
 		return
 	}
-	s.renderPage(w, "guild", guildViewData{
+	s.renderPage(w, r, "guild", guildViewData{
 		pageData: s.base(r, "guild"),
 		Guild:    guild,
 	})
@@ -314,14 +315,14 @@ func (s *Server) handleGuildAudit(w http.ResponseWriter, r *http.Request) {
 
 	sinceParam := r.URL.Query().Get("since")
 	since := time.Now().AddDate(0, 0, -7)
-	sinceLabel := "7 derniers jours"
+	sinceKey := "7d"
 	switch sinceParam {
 	case "1d":
 		since = time.Now().AddDate(0, 0, -1)
-		sinceLabel = "Dernières 24h"
+		sinceKey = "1d"
 	case "30d":
 		since = time.Now().AddDate(0, 0, -30)
-		sinceLabel = "30 derniers jours"
+		sinceKey = "30d"
 	case "7d":
 	default:
 		sinceParam = "7d"
@@ -333,10 +334,10 @@ func (s *Server) handleGuildAudit(w http.ResponseWriter, r *http.Request) {
 		logs = nil
 	}
 
-	s.renderPage(w, "audit", auditViewData{
+	s.renderPage(w, r, "audit", auditViewData{
 		guildViewData: guildViewData{pageData: s.base(r, "audit"), Guild: guild},
 		Logs:          logs,
-		Since:         sinceLabel,
+		Since:         sinceKey,
 	})
 }
 
@@ -368,7 +369,7 @@ func (s *Server) handleGuildRisk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.renderPage(w, "risk", riskViewData{
+	s.renderPage(w, r, "risk", riskViewData{
 		guildViewData: guildViewData{pageData: s.base(r, "risk"), Guild: guild},
 		CritLogs:      critLogs,
 		WarnLogs:      warnLogs,
@@ -393,17 +394,18 @@ func (s *Server) handleGuildModules(w http.ResponseWriter, r *http.Request) {
 		zap.Bool("is_business", isBusiness),
 	)
 
+	lang := currentLang(r)
 	modules := []moduleStatus{
-		{Name: "Anti-Spam", Description: "Détecte les rafales de messages et limite le spam.", Enabled: true, Icon: "shield"},
-		{Name: "Anti-Raid", Description: "Détecte les afflux de nouveaux membres et déclenche le lockdown.", Enabled: true, Icon: "users"},
-		{Name: "Anti-Phishing", Description: "Bloque les liens suspects, de phishing et de nitro scam.", Enabled: true, Icon: "link"},
-		{Name: "Anti-Nuke", Description: "Empêche la destruction massive de canaux, rôles et bans.", Enabled: true, Icon: "bomb"},
-		{Name: "Behaviour Graph", Description: "Analyse comportementale avancée des membres.", Enabled: isBusiness, Icon: "activity"},
-		{Name: "File Scanner", Description: "Analyse les pièces jointes à la recherche de malwares.", Enabled: isBusiness, Icon: "file"},
-		{Name: "Verification", Description: "Système de vérification pour les nouveaux membres.", Enabled: isPro, Icon: "check"},
+		{Name: "Anti-Spam", Description: s.i18n.T(lang, "modules.antispam.desc"), Enabled: true, Icon: "shield"},
+		{Name: "Anti-Raid", Description: s.i18n.T(lang, "modules.antiraid.desc"), Enabled: true, Icon: "users"},
+		{Name: "Anti-Phishing", Description: s.i18n.T(lang, "modules.antiphishing.desc"), Enabled: true, Icon: "link"},
+		{Name: "Anti-Nuke", Description: s.i18n.T(lang, "modules.antinuke.desc"), Enabled: true, Icon: "bomb"},
+		{Name: "Behaviour Graph", Description: s.i18n.T(lang, "modules.behaviour.desc"), Enabled: isBusiness, Icon: "activity"},
+		{Name: "File Scanner", Description: s.i18n.T(lang, "modules.filescanner.desc"), Enabled: isBusiness, Icon: "file"},
+		{Name: "Verification", Description: s.i18n.T(lang, "modules.verification.desc"), Enabled: isPro, Icon: "check"},
 	}
 
-	s.renderPage(w, "modules", modulesViewData{
+	s.renderPage(w, r, "modules", modulesViewData{
 		guildViewData: guildViewData{pageData: s.base(r, "modules"), Guild: guild},
 		Modules:       modules,
 	})
@@ -430,22 +432,22 @@ func (s *Server) handleGuildConfig(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		if err := r.ParseForm(); err != nil {
-			data.Error = "Erreur lors de la lecture du formulaire."
-			s.renderPage(w, "config", data)
+			data.Error = s.i18n.T(currentLang(r), "config.error.parse_form")
+			s.renderPage(w, r, "config", data)
 			return
 		}
 		categoryID := r.FormValue("ticket_category_id")
 		if err := s.store.SetTicketCategoryID(r.Context(), guild.ID, categoryID); err != nil {
 			s.logger.Sugar().Errorw("set ticket category", "err", err)
-			data.Error = "Erreur lors de la sauvegarde."
-			s.renderPage(w, "config", data)
+			data.Error = s.i18n.T(currentLang(r), "config.error.save")
+			s.renderPage(w, r, "config", data)
 			return
 		}
 		data.TicketCategoryID = categoryID
 		data.Saved = true
 	}
 
-	s.renderPage(w, "config", data)
+	s.renderPage(w, r, "config", data)
 }
 
 func (s *Server) handleBilling(w http.ResponseWriter, r *http.Request) {
@@ -478,7 +480,7 @@ func (s *Server) handleBilling(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.renderPage(w, "billing", billingData{
+	s.renderPage(w, r, "billing", billingData{
 		pageData:    s.base(r, "billing"),
 		CurrentTier: currentTier,
 		PeriodEnd:   periodEnd,
@@ -585,7 +587,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.renderPage(w, "admin", adminData{
+	s.renderPage(w, r, "admin", adminData{
 		pageData:    s.base(r, "admin"),
 		TotalGuilds: totalGuilds,
 		PlanCounts:  planCounts,
